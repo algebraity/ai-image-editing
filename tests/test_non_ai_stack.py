@@ -25,6 +25,7 @@ from ai_edit_kernel.trace.trace_logger import TraceLogger
 
 ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts"
 CUTE_ROOT = Path(__file__).resolve().parent / "cute"
+VECTOR_ROOT = Path(__file__).resolve().parent / "vector"
 
 
 class NonAIStackTests(unittest.TestCase):
@@ -986,6 +987,61 @@ class NonAIStackTests(unittest.TestCase):
         self.assertGreater(float(layer.pixels[center_y, center_x - 5, 3]), 0.9)
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
 
+    def test_38_import_vector_as_raster(self) -> None:
+        """Rasterize an SVG asset directly into a normal full-canvas raster layer."""
+        case_name = "test_38_import_vector_as_raster"
+        actions = [
+            import_vector_as_raster(
+                "action_001",
+                "layer_vector_icon",
+                vector_fixture_path("simple_icon.svg"),
+                x=16,
+                y=12,
+                width=160,
+                height=120,
+                name="vector icon rasterized",
+                background_color=None,
+            ),
+            export_flat("action_002", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 200, 160, actions)
+
+        layer = doc.get_layer("layer_vector_icon")
+        self.assert_all_succeeded(results)
+        self.assertEqual(layer.kind.value, "raster")
+        self.assertEqual(layer.metadata["source_format"], "vector")
+        self.assertEqual(layer.metadata["rasterized_size"], [160, 120])
+        self.assertGreater(float(layer.pixels[72, 96, 1]), 0.35)
+        self.assertGreater(float(layer.pixels[72, 96, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_39_rasterize_vector_asset(self) -> None:
+        """Rasterize an SVG asset to a standalone PNG without mutating the document."""
+        case_name = "test_39_rasterize_vector_asset"
+        output_path = self.export_path(case_name, "simple_icon.png")
+        actions = [
+            rasterize_vector_asset(
+                "action_001",
+                vector_fixture_path("simple_icon.svg"),
+                output_path,
+                width=120,
+                height=90,
+                background_color="#ffffff",
+            )
+        ]
+        doc, results, summary = self.run_case(case_name, 64, 64, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual(doc.revision, 0)
+        self.assertEqual(doc.layers, [])
+        self.assertTrue(output_path.exists())
+        with Image.open(output_path) as image:
+            self.assertEqual(image.mode, "RGBA")
+            self.assertEqual(image.size, (120, 90))
+            self.assertEqual(image.getpixel((0, 0))[3], 255)
+        self.assertEqual(results[0].output_assets["path"], str(output_path))
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
     def run_case(
         self,
         name: str,
@@ -1184,6 +1240,14 @@ def cute_relative_point(index: int, x: float, y: float, padding: int = 16) -> tu
     return padding + int(round(image_width * x)), padding + int(round(image_height * y))
 
 
+def vector_fixture_path(name: str) -> Path:
+    """Return a vector fixture path."""
+    path = VECTOR_ROOT / name
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
+
+
 def create_layer(
     action_id: str,
     layer_id: str,
@@ -1231,6 +1295,62 @@ def import_image_as_layer(
             "set_active": set_active,
         },
         target={"output_layer_id": layer_id},
+    )
+
+
+def import_vector_as_raster(
+    action_id: str,
+    layer_id: str,
+    path: Path,
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    name: str,
+    opacity: float = 1.0,
+    set_active: bool = True,
+    background_color: Any = None,
+) -> dict[str, Any]:
+    return action(
+        action_id,
+        "import_vector_as_raster",
+        params={
+            "path": str(path),
+            "name": name,
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "opacity": opacity,
+            "blend_mode": "normal",
+            "set_active": set_active,
+            "background_color": background_color,
+        },
+        target={"output_layer_id": layer_id},
+    )
+
+
+def rasterize_vector_asset(
+    action_id: str,
+    path: Path,
+    output_path: Path,
+    *,
+    width: int,
+    height: int,
+    background_color: Any = None,
+) -> dict[str, Any]:
+    return action(
+        action_id,
+        "rasterize_vector_asset",
+        params={
+            "path": str(path),
+            "output_path": str(output_path),
+            "width": width,
+            "height": height,
+            "background_color": background_color,
+        },
+        preconditions={"require_write_mask": False},
     )
 
 

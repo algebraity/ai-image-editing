@@ -642,6 +642,65 @@ The image is loaded as RGBA and placed into a full-canvas raster layer at
 integer pixel offset `[x, y]`. The imported image must fit within the current
 canvas.
 
+### `import_vector_as_raster`
+
+```json
+{
+  "id": "action_import_vector",
+  "type": "import_vector_as_raster",
+  "target": {
+    "output_layer_id": "layer_logo"
+  },
+  "params": {
+    "path": "inputs/logo.svg",
+    "name": "logo",
+    "x": 64,
+    "y": 64,
+    "width": 512,
+    "height": 512,
+    "opacity": 1.0,
+    "blend_mode": "normal",
+    "set_active": true,
+    "background_color": null
+  }
+}
+```
+
+The vector asset is rasterized into straight-alpha RGBA pixels and placed into a
+full-canvas raster layer at integer pixel offset `[x, y]`. The rasterized image
+must fit within the current canvas. `width` and `height` are optional positive
+integer output dimensions; if one dimension is omitted, SVG aspect ratio is
+preserved. `background_color`, when supplied, composites the rasterized result
+over that color before insertion.
+
+The prototype supports SVG inputs. If CairoSVG is installed, it is used as the
+renderer. Otherwise the kernel uses a conservative built-in SVG renderer for
+basic shapes, simple line paths, solid fills and strokes, opacity, and common
+transforms. The resulting layer is always raster; native vector editing is not
+part of this action.
+
+### `rasterize_vector_asset`
+
+```json
+{
+  "id": "action_rasterize_vector",
+  "type": "rasterize_vector_asset",
+  "params": {
+    "path": "inputs/logo.svg",
+    "output_path": "artifacts/logo.png",
+    "width": 512,
+    "height": 512,
+    "background_color": "#ffffff"
+  }
+}
+```
+
+The vector asset is rasterized to a standalone artifact without changing the
+document. `output_path` must end in `.png` or `.npy`. PNG outputs store an RGBA
+image; NPY outputs store the kernel's float RGBA pixel array. The same SVG
+renderer rules and optional `background_color` compositing behavior used by
+`import_vector_as_raster` apply here.
+
 ### `create_layer`
 
 ```json
@@ -1270,6 +1329,14 @@ should reference the source session and use canonical action JSON in the target.
       {
         "name": "import_image_as_layer",
         "description": "Import an image file into a full-canvas raster layer."
+      },
+      {
+        "name": "import_vector_as_raster",
+        "description": "Rasterize a vector asset and import it as a full-canvas raster layer."
+      },
+      {
+        "name": "rasterize_vector_asset",
+        "description": "Rasterize a vector asset to a standalone PNG or NPY artifact."
       },
       {
         "name": "create_layer",

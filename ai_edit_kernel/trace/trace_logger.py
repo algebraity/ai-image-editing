@@ -849,6 +849,8 @@ def _available_tools() -> list[dict[str, str]]:
         {"name": "resize_canvas", "description": "Resize the canvas around its center."},
         {"name": "crop", "description": "Crop the document, or clear outside a crop on one layer or mask."},
         {"name": "import_image_as_layer", "description": "Import an image file into a full-canvas raster layer."},
+        {"name": "import_vector_as_raster", "description": "Rasterize a vector asset and import it as a full-canvas raster layer."},
+        {"name": "rasterize_vector_asset", "description": "Rasterize a vector asset to a standalone PNG or NPY artifact."},
         {"name": "create_layer", "description": "Create a new full-canvas layer."},
         {"name": "delete_layer", "description": "Remove a layer from the document stack."},
         {"name": "duplicate_layer", "description": "Create a deep copy of a layer."},

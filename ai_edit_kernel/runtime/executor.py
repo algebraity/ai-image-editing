@@ -7,8 +7,12 @@ them; trace sinks record what happened.
 
 from __future__ import annotations
 
+import gzip
+import re
+import xml.etree.ElementTree as ET
 from collections import deque
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -175,6 +179,8 @@ class Executor:
             ActionType.RESIZE_CANVAS: self._execute_resize_canvas,
             ActionType.CROP: self._execute_crop,
             ActionType.IMPORT_IMAGE_AS_LAYER: self._execute_import_image_as_layer,
+            ActionType.IMPORT_VECTOR_AS_RASTER: self._execute_import_vector_as_raster,
+            ActionType.RASTERIZE_VECTOR_ASSET: self._execute_rasterize_vector_asset,
             ActionType.CREATE_LAYER: self._execute_create_layer,
             ActionType.DELETE_LAYER: self._execute_delete_layer,
             ActionType.DUPLICATE_LAYER: self._execute_duplicate_layer,
@@ -393,6 +399,85 @@ class Executor:
             status=ActionStatus.EXECUTED,
             created_layer_ids=[layer.id],
             output_assets={"source_path": str(path)},
+        )
+
+    def _execute_import_vector_as_raster(self, document: DocumentState, action: Action) -> ActionResult:
+        """Rasterize a vector asset and place it into a full-canvas raster layer."""
+        output_layer_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        path = Path(action.params["path"])
+        rasterized, render_metadata = _rasterize_vector_asset(
+            path,
+            width=action.params.get("width"),
+            height=action.params.get("height"),
+            background_color=action.params.get("background_color"),
+        )
+        image_height, image_width = rasterized.shape[:2]
+        x = _integer_coordinate(action.params.get("x", 0), "params.x")
+        y = _integer_coordinate(action.params.get("y", 0), "params.y")
+        if x < 0 or y < 0:
+            raise ValueError("import_vector_as_raster coordinates must be nonnegative")
+        if x + image_width > document.canvas.width or y + image_height > document.canvas.height:
+            raise ValueError("rasterized vector image must fit inside the document canvas")
+
+        pixels = np.zeros((document.canvas.height, document.canvas.width, 4), dtype=np.float32)
+        pixels[y : y + image_height, x : x + image_width, :] = rasterized
+        layer = Layer(
+            id=output_layer_id,
+            name=action.params.get("name", path.stem),
+            kind=LayerKind.RASTER,
+            pixels=pixels,
+            opacity=float(action.params.get("opacity", 1.0)),
+            blend_mode=BlendMode(action.params.get("blend_mode", BlendMode.NORMAL.value)),
+            metadata={
+                "source_path": str(path),
+                "source_format": "vector",
+                "rasterized_size": [image_width, image_height],
+                "import_offset_xy": [x, y],
+                "vector_render": render_metadata,
+            },
+        )
+        document.add_layer(layer)
+        if action.params.get("set_active", True):
+            document.set_active_layer(layer.id)
+
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            created_layer_ids=[layer.id],
+            output_assets={
+                "source_path": str(path),
+                "source_format": "vector",
+                "rasterized_size": [image_width, image_height],
+            },
+            metadata={"vector_render": render_metadata},
+        )
+
+    def _execute_rasterize_vector_asset(self, document: DocumentState, action: Action) -> ActionResult:
+        """Rasterize a vector asset to a standalone PNG or NPY artifact."""
+        source_path = Path(action.params["path"])
+        output_path = Path(action.params["output_path"])
+        rasterized, render_metadata = _rasterize_vector_asset(
+            source_path,
+            width=action.params.get("width"),
+            height=action.params.get("height"),
+            background_color=action.params.get("background_color"),
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        suffix = output_path.suffix.lower()
+        if suffix == ".npy":
+            np.save(output_path, rasterized)
+            output_format = "npy"
+        elif suffix == ".png":
+            _save_rgba_png(rasterized, output_path)
+            output_format = "png"
+        else:
+            raise ValueError("rasterize_vector_asset output_path must end in .npy or .png")
+
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            output_assets={"source_path": str(source_path), "path": str(output_path), "format": output_format},
+            metadata={"vector_render": render_metadata},
         )
 
     def _execute_delete_layer(self, document: DocumentState, action: Action) -> ActionResult:
@@ -926,7 +1011,12 @@ class Executor:
 
 def _mutates_document(action: Action) -> bool:
     """Return whether a successful action should advance the document revision."""
-    return ActionType(action.type) not in {ActionType.EXPORT_FLAT, ActionType.NO_OP, ActionType.VALIDATE}
+    return ActionType(action.type) not in {
+        ActionType.EXPORT_FLAT,
+        ActionType.RASTERIZE_VECTOR_ASSET,
+        ActionType.NO_OP,
+        ActionType.VALIDATE,
+    }
 
 
 def _required_target(value: Optional[str], field_name: str) -> str:
@@ -981,6 +1071,567 @@ def _load_rgba_image(path: Path) -> np.ndarray:
     with Image.open(path) as image:
         rgba = image.convert("RGBA")
         return (np.asarray(rgba, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _rasterize_vector_asset(
+    path: Path,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    background_color: Any = None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Rasterize a supported vector asset into straight-alpha RGBA floats."""
+    suffix = path.suffix.lower()
+    if suffix not in {".svg", ".svgz"}:
+        raise ValueError("vector rasterization currently supports .svg and .svgz files")
+    vector_bytes = _read_vector_bytes(path)
+
+    rasterized = _rasterize_svg_with_cairosvg(vector_bytes, width, height)
+    renderer = "cairosvg"
+    if rasterized is None:
+        rasterized = _rasterize_svg_builtin(vector_bytes, width, height)
+        renderer = "builtin_svg_subset"
+
+    if background_color is not None:
+        rasterized = _composite_background(rasterized, _parse_color(background_color))
+
+    image_height, image_width = rasterized.shape[:2]
+    return rasterized, {"renderer": renderer, "source_path": str(path), "output_size": [image_width, image_height]}
+
+
+def _read_vector_bytes(path: Path) -> bytes:
+    """Read an SVG or compressed SVG file."""
+    if not path.exists():
+        raise FileNotFoundError(path)
+    data = path.read_bytes()
+    if path.suffix.lower() == ".svgz":
+        return gzip.decompress(data)
+    return data
+
+
+def _rasterize_svg_with_cairosvg(vector_bytes: bytes, width: Optional[int], height: Optional[int]) -> Optional[np.ndarray]:
+    """Rasterize SVG bytes through CairoSVG when the optional dependency exists."""
+    try:
+        import cairosvg  # type: ignore[import-not-found]
+        from PIL import Image
+    except ImportError:
+        return None
+
+    kwargs: dict[str, Any] = {"bytestring": vector_bytes}
+    if width is not None:
+        kwargs["output_width"] = int(width)
+    if height is not None:
+        kwargs["output_height"] = int(height)
+    png_bytes = cairosvg.svg2png(**kwargs)
+    with Image.open(BytesIO(png_bytes)) as image:
+        rgba = image.convert("RGBA")
+        return (np.asarray(rgba, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _rasterize_svg_builtin(vector_bytes: bytes, width: Optional[int], height: Optional[int]) -> np.ndarray:
+    """Rasterize a conservative SVG subset without external dependencies."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("builtin SVG rasterization requires Pillow") from exc
+
+    root = ET.fromstring(vector_bytes)
+    if _local_name(root.tag) != "svg":
+        raise ValueError("vector asset root must be an SVG document")
+    output_width, output_height, view_box = _svg_output_geometry(root, width, height)
+    antialias = _svg_antialias_scale(output_width, output_height)
+    image = Image.new("RGBA", (output_width * antialias, output_height * antialias), (0, 0, 0, 0))
+
+    view_x, view_y, view_width, view_height = view_box
+    base_transform = (
+        output_width * antialias / view_width,
+        0.0,
+        0.0,
+        output_height * antialias / view_height,
+        -view_x * output_width * antialias / view_width,
+        -view_y * output_height * antialias / view_height,
+    )
+    _draw_svg_children(image, root, base_transform, _default_svg_style())
+    if antialias != 1:
+        image = image.resize((output_width, output_height), Image.Resampling.LANCZOS)
+    return (np.asarray(image, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _svg_output_geometry(root: ET.Element, width: Optional[int], height: Optional[int]) -> tuple[int, int, tuple[float, float, float, float]]:
+    """Return output size and viewBox for SVG rasterization."""
+    view_box = _parse_view_box(root.get("viewBox"))
+    intrinsic_width = _parse_svg_length(root.get("width"))
+    intrinsic_height = _parse_svg_length(root.get("height"))
+    if intrinsic_width is None and view_box is not None:
+        intrinsic_width = view_box[2]
+    if intrinsic_height is None and view_box is not None:
+        intrinsic_height = view_box[3]
+    if intrinsic_width is None or intrinsic_height is None:
+        raise ValueError("SVG rasterization requires width/height or viewBox dimensions")
+
+    if width is None and height is None:
+        output_width = int(round(intrinsic_width))
+        output_height = int(round(intrinsic_height))
+    elif width is not None and height is None:
+        output_width = int(width)
+        output_height = int(round(output_width * intrinsic_height / intrinsic_width))
+    elif height is not None and width is None:
+        output_height = int(height)
+        output_width = int(round(output_height * intrinsic_width / intrinsic_height))
+    else:
+        output_width = int(width)
+        output_height = int(height)
+    if output_width <= 0 or output_height <= 0:
+        raise ValueError("rasterized SVG dimensions must be positive")
+    if view_box is None:
+        view_box = (0.0, 0.0, float(intrinsic_width), float(intrinsic_height))
+    if view_box[2] <= 0.0 or view_box[3] <= 0.0:
+        raise ValueError("SVG viewBox width and height must be positive")
+    return output_width, output_height, view_box
+
+
+def _svg_antialias_scale(width: int, height: int) -> int:
+    """Return a bounded supersampling factor for the built-in SVG renderer."""
+    max_dimension = max(width, height)
+    if max_dimension <= 512:
+        return 4
+    if max_dimension <= 2048:
+        return 2
+    return 1
+
+
+def _draw_svg_children(surface: Any, parent: ET.Element, transform: tuple[float, float, float, float, float, float], style: dict[str, Any]) -> None:
+    """Render child SVG elements recursively."""
+    for child in list(parent):
+        _draw_svg_element(surface, child, transform, style)
+
+
+def _draw_svg_element(surface: Any, element: ET.Element, parent_transform: tuple[float, float, float, float, float, float], parent_style: dict[str, Any]) -> None:
+    """Render one supported SVG element."""
+    tag = _local_name(element.tag)
+    transform = _multiply_svg_transform(parent_transform, _parse_svg_transform(element.get("transform")))
+    style = _svg_style(element, parent_style)
+
+    if tag in {"defs", "title", "desc", "metadata", "style"}:
+        return
+    if tag in {"svg", "g", "symbol"}:
+        _draw_svg_children(surface, element, transform, style)
+        return
+    if tag == "rect":
+        _draw_svg_polygon(surface, _rect_points(element), transform, style, closed=True)
+        return
+    if tag == "circle":
+        cx = _parse_svg_number(element.get("cx"), 0.0)
+        cy = _parse_svg_number(element.get("cy"), 0.0)
+        radius = _parse_svg_number(element.get("r"), 0.0)
+        _draw_svg_polygon(surface, _ellipse_points(cx, cy, radius, radius), transform, style, closed=True)
+        return
+    if tag == "ellipse":
+        cx = _parse_svg_number(element.get("cx"), 0.0)
+        cy = _parse_svg_number(element.get("cy"), 0.0)
+        rx = _parse_svg_number(element.get("rx"), 0.0)
+        ry = _parse_svg_number(element.get("ry"), 0.0)
+        _draw_svg_polygon(surface, _ellipse_points(cx, cy, rx, ry), transform, style, closed=True)
+        return
+    if tag == "line":
+        points = [
+            (_parse_svg_number(element.get("x1"), 0.0), _parse_svg_number(element.get("y1"), 0.0)),
+            (_parse_svg_number(element.get("x2"), 0.0), _parse_svg_number(element.get("y2"), 0.0)),
+        ]
+        _draw_svg_polyline(surface, points, transform, style, closed=False)
+        return
+    if tag == "polygon":
+        _draw_svg_polygon(surface, _parse_svg_points(element.get("points", "")), transform, style, closed=True)
+        return
+    if tag == "polyline":
+        _draw_svg_polyline(surface, _parse_svg_points(element.get("points", "")), transform, style, closed=False)
+        return
+    if tag == "path":
+        for subpath, closed in _parse_simple_svg_path(element.get("d", "")):
+            if closed:
+                _draw_svg_polygon(surface, subpath, transform, style, closed=True)
+            else:
+                _draw_svg_polyline(surface, subpath, transform, style, closed=False)
+        return
+    raise NotImplementedError(f"builtin SVG rasterizer does not support <{tag}> elements")
+
+
+def _draw_svg_polygon(
+    surface: Any,
+    points: list[tuple[float, float]],
+    transform: tuple[float, float, float, float, float, float],
+    style: dict[str, Any],
+    closed: bool,
+) -> None:
+    """Draw a filled and/or stroked polygon."""
+    if len(points) < 2:
+        return
+    transformed = [_apply_svg_transform(transform, point) for point in points]
+    fill = _svg_fill(style)
+    stroke = _svg_stroke(style)
+    stroke_width = _svg_stroke_width(style, transform)
+    overlay = _svg_overlay(surface)
+    draw = _svg_draw(overlay)
+    if fill is not None and len(transformed) >= 3:
+        draw.polygon(transformed, fill=fill)
+    if stroke is not None and stroke_width > 0:
+        line_points = [*transformed, transformed[0]] if closed else transformed
+        draw.line(line_points, fill=stroke, width=stroke_width, joint="curve")
+    surface.alpha_composite(overlay)
+
+
+def _draw_svg_polyline(
+    surface: Any,
+    points: list[tuple[float, float]],
+    transform: tuple[float, float, float, float, float, float],
+    style: dict[str, Any],
+    closed: bool,
+) -> None:
+    """Draw a stroked polyline."""
+    if len(points) < 2:
+        return
+    transformed = [_apply_svg_transform(transform, point) for point in points]
+    stroke = _svg_stroke(style)
+    stroke_width = _svg_stroke_width(style, transform)
+    if stroke is not None and stroke_width > 0:
+        overlay = _svg_overlay(surface)
+        draw = _svg_draw(overlay)
+        line_points = [*transformed, transformed[0]] if closed else transformed
+        draw.line(line_points, fill=stroke, width=stroke_width, joint="curve")
+        surface.alpha_composite(overlay)
+
+
+def _svg_overlay(surface: Any) -> Any:
+    """Return a transparent drawing layer matching a PIL image."""
+    from PIL import Image
+
+    return Image.new("RGBA", surface.size, (0, 0, 0, 0))
+
+
+def _svg_draw(surface: Any) -> Any:
+    """Return an RGBA-aware PIL drawing context."""
+    from PIL import ImageDraw
+
+    return ImageDraw.Draw(surface)
+
+
+def _rect_points(element: ET.Element) -> list[tuple[float, float]]:
+    """Return rectangle corner points for a supported SVG rect."""
+    x = _parse_svg_number(element.get("x"), 0.0)
+    y = _parse_svg_number(element.get("y"), 0.0)
+    width = _parse_svg_number(element.get("width"), 0.0)
+    height = _parse_svg_number(element.get("height"), 0.0)
+    return [(x, y), (x + width, y), (x + width, y + height), (x, y + height)]
+
+
+def _ellipse_points(cx: float, cy: float, rx: float, ry: float, steps: int = 96) -> list[tuple[float, float]]:
+    """Approximate an ellipse with a polygon."""
+    if rx <= 0.0 or ry <= 0.0:
+        return []
+    angles = np.linspace(0.0, np.pi * 2.0, steps, endpoint=False)
+    return [(float(cx + np.cos(angle) * rx), float(cy + np.sin(angle) * ry)) for angle in angles]
+
+
+def _parse_simple_svg_path(data: str) -> list[tuple[list[tuple[float, float]], bool]]:
+    """Parse SVG paths containing M, L, H, V, and Z commands."""
+    tokens = re.findall(r"[MmLlHhVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", data)
+    subpaths: list[tuple[list[tuple[float, float]], bool]] = []
+    current: list[tuple[float, float]] = []
+    current_x = 0.0
+    current_y = 0.0
+    start_x = 0.0
+    start_y = 0.0
+    command: Optional[str] = None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if re.fullmatch(r"[A-Za-z]", token):
+            command = token
+            index += 1
+            if command in {"Z", "z"}:
+                if current:
+                    subpaths.append((current, True))
+                    current = []
+                current_x, current_y = start_x, start_y
+                command = None
+            continue
+        if command is None:
+            raise ValueError("SVG path data must start with a command")
+        relative = command.islower()
+        upper = command.upper()
+        if upper in {"M", "L"}:
+            x = _path_number(tokens, index)
+            y = _path_number(tokens, index + 1)
+            index += 2
+            if relative:
+                x += current_x
+                y += current_y
+            if upper == "M":
+                if current:
+                    subpaths.append((current, False))
+                current = [(x, y)]
+                start_x, start_y = x, y
+                command = "l" if relative else "L"
+            else:
+                current.append((x, y))
+            current_x, current_y = x, y
+        elif upper == "H":
+            x = _path_number(tokens, index)
+            index += 1
+            if relative:
+                x += current_x
+            current.append((x, current_y))
+            current_x = x
+        elif upper == "V":
+            y = _path_number(tokens, index)
+            index += 1
+            if relative:
+                y += current_y
+            current.append((current_x, y))
+            current_y = y
+        else:
+            raise NotImplementedError(f"builtin SVG rasterizer does not support path command {command!r}")
+    if current:
+        subpaths.append((current, False))
+    return subpaths
+
+
+def _path_number(tokens: list[str], index: int) -> float:
+    """Return a path numeric token."""
+    if index >= len(tokens) or re.fullmatch(r"[A-Za-z]", tokens[index]):
+        raise ValueError("SVG path command is missing a numeric argument")
+    return float(tokens[index])
+
+
+def _parse_svg_points(points: str) -> list[tuple[float, float]]:
+    """Parse an SVG point list."""
+    numbers = [float(number) for number in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", points)]
+    if len(numbers) % 2 != 0:
+        raise ValueError("SVG point list must contain x/y pairs")
+    return [(numbers[index], numbers[index + 1]) for index in range(0, len(numbers), 2)]
+
+
+def _default_svg_style() -> dict[str, Any]:
+    """Return SVG default paint style."""
+    return {
+        "fill": "black",
+        "stroke": "none",
+        "stroke-width": "1",
+        "opacity": "1",
+        "fill-opacity": "1",
+        "stroke-opacity": "1",
+    }
+
+
+def _svg_style(element: ET.Element, parent: dict[str, Any]) -> dict[str, Any]:
+    """Return inherited SVG style values for an element."""
+    style = dict(parent)
+    css = element.get("style")
+    if css:
+        for part in css.split(";"):
+            if ":" in part:
+                key, value = part.split(":", 1)
+                style[key.strip()] = value.strip()
+    for key in ("fill", "stroke", "stroke-width", "opacity", "fill-opacity", "stroke-opacity"):
+        if element.get(key) is not None:
+            style[key] = element.get(key)
+    return style
+
+
+def _svg_fill(style: dict[str, Any]) -> Optional[tuple[int, int, int, int]]:
+    """Return an RGBA fill color or None."""
+    opacity = _parse_svg_number(style.get("opacity"), 1.0) * _parse_svg_number(style.get("fill-opacity"), 1.0)
+    return _svg_color(style.get("fill", "black"), opacity)
+
+
+def _svg_stroke(style: dict[str, Any]) -> Optional[tuple[int, int, int, int]]:
+    """Return an RGBA stroke color or None."""
+    opacity = _parse_svg_number(style.get("opacity"), 1.0) * _parse_svg_number(style.get("stroke-opacity"), 1.0)
+    return _svg_color(style.get("stroke", "none"), opacity)
+
+
+def _svg_stroke_width(style: dict[str, Any], transform: tuple[float, float, float, float, float, float]) -> int:
+    """Return stroke width in rendered pixels."""
+    width = _parse_svg_number(style.get("stroke-width"), 1.0)
+    scale_x = float(np.hypot(transform[0], transform[1]))
+    scale_y = float(np.hypot(transform[2], transform[3]))
+    return max(1, int(round(width * (scale_x + scale_y) / 2.0)))
+
+
+def _svg_color(value: Any, opacity: float) -> Optional[tuple[int, int, int, int]]:
+    """Parse a small set of SVG color formats."""
+    if value is None:
+        return None
+    color = str(value).strip().lower()
+    if color in {"none", "transparent"}:
+        return None
+    named = {
+        "black": "#000000",
+        "white": "#ffffff",
+        "red": "#ff0000",
+        "green": "#008000",
+        "blue": "#0000ff",
+        "yellow": "#ffff00",
+        "cyan": "#00ffff",
+        "magenta": "#ff00ff",
+        "purple": "#800080",
+        "orange": "#ffa500",
+        "gray": "#808080",
+        "grey": "#808080",
+    }
+    if color in named:
+        color = named[color]
+    if color.startswith("#"):
+        hex_value = color[1:]
+        if len(hex_value) in {3, 4}:
+            hex_value = "".join(char * 2 for char in hex_value)
+        if len(hex_value) == 6:
+            hex_value += "ff"
+        if len(hex_value) != 8:
+            raise ValueError(f"unsupported SVG color {value!r}")
+        rgba = tuple(int(hex_value[index : index + 2], 16) for index in range(0, 8, 2))
+        alpha = int(round(rgba[3] * np.clip(opacity, 0.0, 1.0)))
+        return (rgba[0], rgba[1], rgba[2], alpha)
+    match = re.fullmatch(r"rgba?\(([^)]+)\)", color)
+    if match:
+        parts = [part.strip() for part in match.group(1).split(",")]
+        if len(parts) not in {3, 4}:
+            raise ValueError(f"unsupported SVG color {value!r}")
+        rgb = [_svg_color_channel(part) for part in parts[:3]]
+        alpha = float(parts[3]) if len(parts) == 4 else 1.0
+        alpha = int(round(255.0 * np.clip(alpha * opacity, 0.0, 1.0)))
+        return (rgb[0], rgb[1], rgb[2], alpha)
+    raise ValueError(f"unsupported SVG color {value!r}")
+
+
+def _svg_color_channel(value: str) -> int:
+    """Parse one SVG RGB channel."""
+    stripped = value.strip()
+    if stripped.endswith("%"):
+        return int(round(np.clip(float(stripped[:-1]) / 100.0, 0.0, 1.0) * 255.0))
+    return int(round(np.clip(float(stripped), 0.0, 255.0)))
+
+
+def _parse_svg_transform(value: Optional[str]) -> tuple[float, float, float, float, float, float]:
+    """Parse a small, useful subset of SVG transform syntax."""
+    transform = _identity_svg_transform()
+    if not value:
+        return transform
+    for name, raw_args in re.findall(r"([A-Za-z]+)\(([^)]*)\)", value):
+        args = [float(number) for number in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", raw_args)]
+        lower_name = name.lower()
+        if lower_name == "translate":
+            tx = args[0] if args else 0.0
+            ty = args[1] if len(args) > 1 else 0.0
+            next_transform = (1.0, 0.0, 0.0, 1.0, tx, ty)
+        elif lower_name == "scale":
+            sx = args[0] if args else 1.0
+            sy = args[1] if len(args) > 1 else sx
+            next_transform = (sx, 0.0, 0.0, sy, 0.0, 0.0)
+        elif lower_name == "rotate":
+            angle = np.deg2rad(args[0] if args else 0.0)
+            cos_theta = float(np.cos(angle))
+            sin_theta = float(np.sin(angle))
+            rotation = (cos_theta, sin_theta, -sin_theta, cos_theta, 0.0, 0.0)
+            if len(args) >= 3:
+                cx, cy = args[1], args[2]
+                next_transform = _multiply_svg_transform(
+                    _multiply_svg_transform((1.0, 0.0, 0.0, 1.0, cx, cy), rotation),
+                    (1.0, 0.0, 0.0, 1.0, -cx, -cy),
+                )
+            else:
+                next_transform = rotation
+        elif lower_name == "matrix" and len(args) == 6:
+            next_transform = (args[0], args[1], args[2], args[3], args[4], args[5])
+        else:
+            raise NotImplementedError(f"builtin SVG rasterizer does not support transform {name!r}")
+        transform = _multiply_svg_transform(transform, next_transform)
+    return transform
+
+
+def _identity_svg_transform() -> tuple[float, float, float, float, float, float]:
+    """Return the identity SVG transform."""
+    return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def _multiply_svg_transform(
+    first: tuple[float, float, float, float, float, float],
+    second: tuple[float, float, float, float, float, float],
+) -> tuple[float, float, float, float, float, float]:
+    """Return `first @ second` for SVG affine transforms."""
+    a1, b1, c1, d1, e1, f1 = first
+    a2, b2, c2, d2, e2, f2 = second
+    return (
+        a1 * a2 + c1 * b2,
+        b1 * a2 + d1 * b2,
+        a1 * c2 + c1 * d2,
+        b1 * c2 + d1 * d2,
+        a1 * e2 + c1 * f2 + e1,
+        b1 * e2 + d1 * f2 + f1,
+    )
+
+
+def _apply_svg_transform(transform: tuple[float, float, float, float, float, float], point: tuple[float, float]) -> tuple[float, float]:
+    """Apply an SVG affine transform to a point."""
+    x, y = point
+    a, b, c, d, e, f = transform
+    return a * x + c * y + e, b * x + d * y + f
+
+
+def _parse_view_box(value: Optional[str]) -> Optional[tuple[float, float, float, float]]:
+    """Parse an SVG viewBox attribute."""
+    if value is None:
+        return None
+    numbers = [float(number) for number in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", value)]
+    if len(numbers) != 4:
+        raise ValueError("SVG viewBox must contain four numbers")
+    return numbers[0], numbers[1], numbers[2], numbers[3]
+
+
+def _parse_svg_length(value: Optional[str]) -> Optional[float]:
+    """Parse a basic SVG length, accepting unitless values and px."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.endswith("%"):
+        return None
+    match = re.fullmatch(r"([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)(?:px)?", stripped)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _parse_svg_number(value: Any, default: float) -> float:
+    """Parse a numeric SVG attribute."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    parsed = _parse_svg_length(str(value))
+    if parsed is None:
+        raise ValueError(f"unsupported SVG numeric value {value!r}")
+    return parsed
+
+
+def _local_name(tag: str) -> str:
+    """Return an XML local name without namespace."""
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _composite_background(pixels: np.ndarray, background: tuple[float, float, float, float]) -> np.ndarray:
+    """Composite RGBA pixels over a solid/transparent background."""
+    base = np.zeros_like(pixels)
+    base[..., :] = background
+    return _source_over_rgba(base, pixels[..., :3], pixels[..., 3:4])
+
+
+def _save_rgba_png(pixels: np.ndarray, path: Path) -> None:
+    """Save an RGBA float array as a PNG."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("PNG export requires Pillow") from exc
+    image = Image.fromarray(np.clip(pixels * 255.0, 0.0, 255.0).astype(np.uint8), mode="RGBA")
+    image.save(path)
 
 
 def _integer_coordinate(value: Any, field_name: str) -> int:

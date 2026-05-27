@@ -43,6 +43,8 @@ class ActionType(str, Enum):
     # Document actions
     NEW_DOCUMENT = "new_document"
     IMPORT_IMAGE_AS_LAYER = "import_image_as_layer"
+    IMPORT_VECTOR_AS_RASTER = "import_vector_as_raster"
+    RASTERIZE_VECTOR_ASSET = "rasterize_vector_asset"
     EXPORT_FLAT = "export_flat"
     EXPORT_LAYERED_BUNDLE = "export_layered_bundle"
     RESIZE_CANVAS = "resize_canvas"
@@ -654,6 +656,41 @@ def _validate_import_image_as_layer(action: Action) -> None:
     _bool_value(action.params.get("set_active", True), "params.set_active")
 
 
+def _validate_import_vector_as_raster(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {"path", "name", "x", "y", "width", "height", "opacity", "blend_mode", "set_active", "background_color"},
+    )
+    _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    _required_string(action.params, "path", "params.path")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _integer_number(action.params.get("x", 0), "params.x")
+    _integer_number(action.params.get("y", 0), "params.y")
+    _optional_positive_int(action.params.get("width"), "params.width")
+    _optional_positive_int(action.params.get("height"), "params.height")
+    _optional_unit_number(action.params.get("opacity", 1.0), "params.opacity")
+    _optional_enum_string(
+        action.params.get("blend_mode", "normal"),
+        {"normal", "multiply", "screen", "overlay", "add", "subtract"},
+        "params.blend_mode",
+    )
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+    if action.params.get("background_color") is not None:
+        _validate_color(action.params["background_color"], "params.background_color")
+
+
+def _validate_rasterize_vector_asset(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"path", "output_path", "width", "height", "background_color"})
+    _required_string(action.params, "path", "params.path")
+    _required_string(action.params, "output_path", "params.output_path")
+    _optional_positive_int(action.params.get("width"), "params.width")
+    _optional_positive_int(action.params.get("height"), "params.height")
+    if action.params.get("background_color") is not None:
+        _validate_color(action.params["background_color"], "params.background_color")
+
+
 def _validate_set_active_layer(action: Action) -> None:
     _require_target_id(action.target.layer_id, "target.layer_id")
 
@@ -915,6 +952,8 @@ _PARAM_VALIDATORS = {
     ActionType.RESIZE_CANVAS: _validate_resize_canvas,
     ActionType.CROP: _validate_crop,
     ActionType.IMPORT_IMAGE_AS_LAYER: _validate_import_image_as_layer,
+    ActionType.IMPORT_VECTOR_AS_RASTER: _validate_import_vector_as_raster,
+    ActionType.RASTERIZE_VECTOR_ASSET: _validate_rasterize_vector_asset,
     ActionType.CREATE_LAYER: _validate_create_layer,
     ActionType.DELETE_LAYER: _validate_delete_layer,
     ActionType.DUPLICATE_LAYER: _validate_duplicate_layer,
