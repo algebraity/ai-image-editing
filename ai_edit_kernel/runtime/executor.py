@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - exercised only when SciPy is absent
 from ai_edit_kernel.document.document_state import CanvasSpec, ColorSpace, DocumentMetadata, DocumentState
 from ai_edit_kernel.document.layer import BlendMode, Layer, LayerKind
 from ai_edit_kernel.document.mask import Mask, MaskKind
+from ai_edit_kernel.diffusion import DiffusionOrchestrator
 from ai_edit_kernel.region import (
     apply_write_mask as _region_apply_write_mask,
     bbox_from_mask as _region_bbox_from_mask,
@@ -45,6 +46,10 @@ from ai_edit_kernel.schema.actions import Action, ActionBatch, ActionError, Acti
 
 class DiffusionBackend(Protocol):
     """Protocol for pluggable diffusion/image-generation backends."""
+
+    def run(self, job: Any) -> Any:
+        """Generate candidate pixels for a typed diffusion job."""
+        ...
 
     def inpaint(self, job: dict[str, Any]) -> dict[str, Any]:
         """Generate pixels for a masked inpainting job and return result assets."""
@@ -68,6 +73,14 @@ class TraceSink(Protocol):
 
     def log_action_result(self, action: Action, result: ActionResult, document: DocumentState) -> None:
         """Record the final result of an action."""
+        ...
+
+    def log_diffusion_job_started(self, document: DocumentState, action: Action, job_id: str, operation: str, **kwargs: Any) -> None:
+        """Record that a diffusion backend job started."""
+        ...
+
+    def log_diffusion_job_result(self, document: DocumentState, action: Action, job_id: str, status: str, **kwargs: Any) -> None:
+        """Record the final result of a diffusion backend job."""
         ...
 
 
@@ -1467,7 +1480,7 @@ class Executor:
 
     def _execute_outpaint_region(self, document: DocumentState, action: Action) -> ActionResult:
         """Call the diffusion backend for an outpainting region and composite the result."""
-        return self._execute_diffusion_region(document, action, "inpaint")
+        return self._execute_diffusion_region(document, action, "outpaint")
 
     def _execute_create_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a rasterized text layer with editable text metadata."""
@@ -1627,43 +1640,11 @@ class Executor:
 
     def _execute_diffusion_to_layer(self, document: DocumentState, action: Action, method: str) -> ActionResult:
         """Call a configured diffusion backend and import returned pixels as a layer."""
-        backend = self.context.diffusion_backend
-        if backend is None:
-            raise RuntimeError(f"{method} requires a configured diffusion_backend")
-        job = self._diffusion_job(document, action)
-        response = getattr(backend, method)(job)
-        pixels = _pixels_from_backend_response(response)
-        pixels = _fit_pixels_to_canvas(pixels, document.canvas.width, document.canvas.height)
-        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
-        layer = Layer(
-            id=output_id,
-            name=action.params.get("output_layer_name", method),
-            kind=LayerKind.RASTER,
-            pixels=pixels,
-        )
-        document.add_layer(layer)
-        document.set_active_layer(layer.id)
-        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[layer.id], output_assets=dict(response.get("assets", {})))
+        return self._diffusion_orchestrator().execute_to_layer(document, action, method)
 
     def _execute_diffusion_region(self, document: DocumentState, action: Action, method: str) -> ActionResult:
         """Call a diffusion backend and composite the returned pixels through the write mask."""
-        backend = self.context.diffusion_backend
-        if backend is None:
-            raise RuntimeError(f"{method} requires a configured diffusion_backend")
-        target = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
-        _require_pixel_layer(target)
-        job = self._diffusion_job(document, action)
-        response = getattr(backend, method)(job)
-        generated = _fit_pixels_to_canvas(_pixels_from_backend_response(response), document.canvas.width, document.canvas.height)
-        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
-        if action.params.get("mode", "replace_region") == "new_layer":
-            layer = Layer(id=output_id, name=action.params.get("output_layer_name", method), kind=LayerKind.RASTER, pixels=generated)
-            document.add_layer(layer)
-            return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[layer.id], output_assets=dict(response.get("assets", {})))
-        proposed = np.array(target.pixels, copy=True)
-        proposed[..., :] = generated
-        target.pixels = self.apply_write_mask(target.pixels, proposed, action.write_mask_id, document)
-        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[target.id], output_assets=dict(response.get("assets", {})))
+        return self._diffusion_orchestrator().execute_region(document, action, method)
 
     def _diffusion_job(self, document: DocumentState, action: Action) -> dict[str, Any]:
         """Build a backend job payload with prompt, preview, and mask context."""
@@ -1686,6 +1667,15 @@ class Executor:
             if layer.pixels is not None:
                 job["target_pixels"] = layer.pixels
         return job
+
+    def _diffusion_orchestrator(self) -> DiffusionOrchestrator:
+        """Return the configured diffusion orchestrator."""
+        if self.context.diffusion_backend is None:
+            raise RuntimeError("diffusion actions require a configured diffusion_backend")
+        return DiffusionOrchestrator(
+            backend=self.context.diffusion_backend,
+            trace_sink=self.context.trace_sink,
+        )
 
     def _execute_export_flat(self, document: DocumentState, action: Action) -> ActionResult:
         """Export a flattened preview to `.npy` or `.png`."""

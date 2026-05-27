@@ -391,6 +391,8 @@ class Action:
             ActionType.COLORIZE,
             ActionType.REPLACE_COLOR,
             ActionType.DESATURATE,
+            ActionType.INPAINT_REGION,
+            ActionType.OUTPAINT_REGION,
         }
 
     def to_json(self) -> JsonObject:
@@ -1404,7 +1406,11 @@ def _validate_perception_action(action: Action) -> None:
 
 
 def _validate_diffusion_action(action: Action) -> None:
-    _reject_unknown_keys(action.params, "params", {"prompt", "negative_prompt", "seed", "denoise", "backend", "job", "output_layer_name", "mode"})
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {"prompt", "negative_prompt", "seed", "denoise", "guidance_scale", "steps", "backend", "job", "output_layer_name", "mode", "padding"},
+    )
     if action.type in {ActionType.INPAINT_REGION, ActionType.OUTPAINT_REGION, ActionType.IMG2IMG_TO_LAYER}:
         _require_target_id(action.target.layer_id, "target.layer_id")
     if action.type in {ActionType.TXT2IMG_TO_LAYER, ActionType.IMG2IMG_TO_LAYER, ActionType.INPAINT_REGION, ActionType.OUTPAINT_REGION}:
@@ -1419,6 +1425,10 @@ def _validate_diffusion_action(action: Action) -> None:
         _integer_number(action.params["seed"], "params.seed")
     if "denoise" in action.params:
         _optional_unit_number(action.params["denoise"], "params.denoise")
+    if "guidance_scale" in action.params:
+        _nonnegative_number(action.params["guidance_scale"], "params.guidance_scale")
+    if "steps" in action.params:
+        _positive_int(action.params["steps"], "params.steps")
     if "backend" in action.params:
         _optional_string(action.params["backend"], "params.backend")
     if "job" in action.params:
@@ -1427,6 +1437,8 @@ def _validate_diffusion_action(action: Action) -> None:
         _optional_string(action.params["output_layer_name"], "params.output_layer_name")
     if "mode" in action.params:
         _optional_enum_string(action.params["mode"], {"replace_region", "new_layer"}, "params.mode")
+    if "padding" in action.params:
+        _padding_value(action.params["padding"], "params.padding")
 
 
 def _validate_export_flat(action: Action) -> None:
@@ -1788,3 +1800,20 @@ def _optional_unit_number(value: Any, field_name: str) -> None:
     number = _number(value, field_name)
     if number < 0.0 or number > 1.0:
         raise ValueError(f"{field_name} must be in [0, 1]")
+
+
+def _padding_value(value: Any, field_name: str) -> None:
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must be an integer or four-integer list")
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError(f"{field_name} must not be negative")
+        return
+    if isinstance(value, (list, tuple)) and len(value) == 4:
+        for index, item in enumerate(value):
+            if isinstance(item, bool) or not isinstance(item, int):
+                raise TypeError(f"{field_name}[{index}] must be an integer")
+            if item < 0:
+                raise ValueError(f"{field_name}[{index}] must not be negative")
+        return
+    raise TypeError(f"{field_name} must be an integer or four-integer list")

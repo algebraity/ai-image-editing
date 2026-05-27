@@ -1040,10 +1040,13 @@ _DIFFUSION_PARAMS = param_schema(
         "negative_prompt": string_field("Negative prompt."),
         "seed": integer_field("Random seed."),
         "denoise": number_field("Denoise strength.", minimum=0, maximum=1),
+        "guidance_scale": number_field("Guidance scale.", minimum=0),
+        "steps": integer_field("Sampling step count.", minimum=1),
         "backend": string_field("Backend name."),
         "job": field("object", "Backend-specific job payload."),
         "output_layer_name": string_field("Generated layer name."),
         "mode": enum_field(("replace_region", "new_layer"), "How to integrate the generated image."),
+        "padding": field("integer", "Context padding in pixels around the write-mask bbox."),
     }
 )
 _TEXT_EDIT_PARAMS = param_schema(

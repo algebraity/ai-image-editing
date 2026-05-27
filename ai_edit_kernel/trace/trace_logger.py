@@ -282,6 +282,40 @@ class TraceLogger:
         )
         self._write_manifest()
 
+    def save_diffusion_asset(self, job_id: str, name: str, data: np.ndarray) -> str:
+        """Save a diffusion crop, mask, or generated output and return its trace path."""
+        self._require_session()
+        if not isinstance(job_id, str) or job_id == "":
+            raise ValueError("job_id must be a non-empty string")
+        if not isinstance(name, str) or name == "":
+            raise ValueError("name must be a non-empty string")
+        if not isinstance(data, np.ndarray):
+            raise TypeError("data must be a NumPy array")
+
+        stem = f"{_safe_label(job_id)}_{_safe_label(name)}"
+        try:
+            from PIL import Image
+        except ImportError:
+            rel = f"diffusion/{stem}.npy"
+            np.save(self._session_dir() / rel, data.astype(np.float32, copy=False))
+            return rel
+
+        if data.ndim == 2:
+            rel = f"diffusion/{stem}.png"
+            image = Image.fromarray(np.clip(data * 255.0, 0.0, 255.0).astype(np.uint8), mode="L")
+            image.save(self._session_dir() / rel)
+            return rel
+        if data.ndim == 3 and data.shape[2] in {3, 4}:
+            rel = f"diffusion/{stem}.png"
+            mode = "RGB" if data.shape[2] == 3 else "RGBA"
+            image = Image.fromarray(np.clip(data * 255.0, 0.0, 255.0).astype(np.uint8), mode=mode)
+            image.save(self._session_dir() / rel)
+            return rel
+
+        rel = f"diffusion/{stem}.npy"
+        np.save(self._session_dir() / rel, data.astype(np.float32, copy=False))
+        return rel
+
     def log_observation(self, document: DocumentState, observation: dict[str, Any], label: str) -> None:
         """Record perception or analyzer output."""
         self._require_session()
