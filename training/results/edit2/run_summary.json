@@ -1,0 +1,280 @@
+{
+  "success": true,
+  "output_path": "/mnt/data/ai_image_editing/kirikawaii_transparent_brown_hair_purple_clips_kernel.png",
+  "trace_dir": "/mnt/data/ai_image_editing/bg_hair_clip_kernel_trace/session_2026_05_27_174038_15d863d6",
+  "manifest_path": "/mnt/data/ai_image_editing/bg_hair_clip_kernel_trace/session_2026_05_27_174038_15d863d6/manifest.json",
+  "events_path": "/mnt/data/ai_image_editing/bg_hair_clip_kernel_trace/session_2026_05_27_174038_15d863d6/events.jsonl",
+  "planner_request_path": "/mnt/data/ai_image_editing/kirikawaii_bg_hair_clips_planner_request.json",
+  "planner_output_path": "/mnt/data/ai_image_editing/kirikawaii_bg_hair_clips_planner_output.json",
+  "action_batch_path": "/mnt/data/ai_image_editing/kirikawaii_bg_hair_clips_action_batch.json",
+  "training_example_path": "/mnt/data/ai_image_editing/kirikawaii_bg_hair_clips_training_example.json",
+  "results": [
+    {
+      "action_id": "action_001",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 0,
+      "after_revision": 1,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_bg_raw"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_002",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 1,
+      "after_revision": 2,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_bg_refined"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_003",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 2,
+      "after_revision": 3,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [
+        "base"
+      ],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_004",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 3,
+      "after_revision": 4,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_base"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_005",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 4,
+      "after_revision": 5,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_shadow"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_006",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 5,
+      "after_revision": 6,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_mid"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_007",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 6,
+      "after_revision": 7,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_highlight"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_008",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 7,
+      "after_revision": 8,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_deep"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_009",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 8,
+      "after_revision": 9,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_combined"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_010",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 9,
+      "after_revision": 10,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_hair_refined"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_011",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 10,
+      "after_revision": 11,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [
+        "base"
+      ],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_012",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 11,
+      "after_revision": 12,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_clips_pink1"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_013",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 12,
+      "after_revision": 13,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_clips_pink2"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_014",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 13,
+      "after_revision": 14,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_clips_light"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_015",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 14,
+      "after_revision": 15,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_clips_midlight"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_016",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 15,
+      "after_revision": 16,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_clips_combined"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_017",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 16,
+      "after_revision": 17,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_clips_refined"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_018",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 17,
+      "after_revision": 18,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [
+        "base"
+      ],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_019",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 18,
+      "after_revision": 18,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [],
+      "output_assets": {
+        "path": "/mnt/data/ai_image_editing/kirikawaii_transparent_brown_hair_purple_clips_kernel.png",
+        "format": "png"
+      },
+      "metadata": {}
+    }
+  ]
+}

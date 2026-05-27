@@ -1,0 +1,55 @@
+{
+  "assets": {
+    "artifacts_dir": "artifacts",
+    "diffusion_dir": "diffusion",
+    "layers_dir": "layers",
+    "masks_dir": "masks",
+    "previews_dir": "previews",
+    "root": ".",
+    "snapshots_dir": "snapshots"
+  },
+  "created_at": "2026-05-27T17:27:24.488Z",
+  "ended_at": "2026-05-27T17:27:34.648Z",
+  "environment": {
+    "deterministic_mode": false,
+    "platform": "linux",
+    "python_version": "3.13",
+    "random_seed": null
+  },
+  "kernel": {
+    "action_schema_version": "ai_edit_actions.v1",
+    "document_schema_version": "ai_edit_document.v1",
+    "kernel_version": "0.1.0",
+    "tool_catalog_version": "planner_tools.v1"
+  },
+  "metadata": {
+    "task_type": "eye_color_change"
+  },
+  "planner": {
+    "planner_model": null,
+    "planner_type": "manual",
+    "planner_version": null,
+    "temperature": null
+  },
+  "rights": {
+    "allowed_for_training": true,
+    "contains_personal_data": false,
+    "source_image_license": "unknown",
+    "user_provided_content": true
+  },
+  "schema_version": "ai_edit_trace.v1",
+  "session_id": "session_2026_05_27_172724_9396ba79",
+  "status": "completed",
+  "success": true,
+  "summary": {
+    "action_count": 10,
+    "final_preview": "previews/doc_rev_0009_final.png",
+    "final_snapshot": "snapshots/doc_rev_0009_final.json",
+    "human_rating": null,
+    "initial_preview": "previews/doc_rev_0000_initial.png",
+    "initial_snapshot": "snapshots/doc_rev_0000_initial.json",
+    "validation_passed": true
+  },
+  "task_type": "eye_color_change",
+  "user_prompt": "Change the eye color of this character to a bright glowing red, keeping the difference in shades / brightness currently present in her eyes in this image."
+}

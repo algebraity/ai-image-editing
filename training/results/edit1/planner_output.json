@@ -1,0 +1,172 @@
+{
+  "schema_version": "ai_edit_planner_output.v1",
+  "description": "Select the blue iris tones in each eye, colorize them red while preserving luminance, then export.",
+  "stop_on_error": true,
+  "actions": [
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_left_iris_dark"
+      },
+      "params": {
+        "name": "left iris dark blue",
+        "color": "#294766",
+        "tolerance": 0.18,
+        "bbox_xyxy": [
+          430,
+          270,
+          710,
+          575
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select darker blue pixels in viewer-left iris."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_left_iris_light"
+      },
+      "params": {
+        "name": "left iris light blue",
+        "color": "#7EABBB",
+        "tolerance": 0.2,
+        "bbox_xyxy": [
+          430,
+          270,
+          710,
+          575
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select lighter blue pixels in viewer-left iris."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_right_iris_dark"
+      },
+      "params": {
+        "name": "right iris dark blue",
+        "color": "#294766",
+        "tolerance": 0.18,
+        "bbox_xyxy": [
+          930,
+          235,
+          1195,
+          500
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select darker blue pixels in viewer-right iris."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_right_iris_light"
+      },
+      "params": {
+        "name": "right iris light blue",
+        "color": "#7EABBB",
+        "tolerance": 0.2,
+        "bbox_xyxy": [
+          930,
+          235,
+          1195,
+          500
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select lighter blue pixels in viewer-right iris."
+    },
+    {
+      "type": "combine_masks",
+      "target": {
+        "mask_id": "mask_iris_blue_union"
+      },
+      "params": {
+        "name": "combined blue iris mask",
+        "operation": "union",
+        "mask_ids": [
+          "mask_left_iris_dark",
+          "mask_left_iris_light",
+          "mask_right_iris_dark",
+          "mask_right_iris_light"
+        ]
+      },
+      "description": "Union all selected iris tone masks."
+    },
+    {
+      "type": "remove_small_islands",
+      "target": {
+        "mask_id": "mask_iris_blue_clean"
+      },
+      "params": {
+        "source_mask_id": "mask_iris_blue_union",
+        "name": "cleaned iris mask",
+        "min_area": 40,
+        "set_active": false
+      },
+      "description": "Remove tiny isolated selections."
+    },
+    {
+      "type": "feather_mask",
+      "target": {
+        "mask_id": "mask_iris_blue_write"
+      },
+      "params": {
+        "source_mask_id": "mask_iris_blue_clean",
+        "name": "soft iris write mask",
+        "radius": 0.65
+      },
+      "description": "Soften mask edges for antialiasing."
+    },
+    {
+      "type": "colorize",
+      "target": {
+        "layer_id": "layer_source"
+      },
+      "write_mask_id": "mask_iris_blue_write",
+      "params": {
+        "color": "#ff0000",
+        "amount": 1.0
+      },
+      "description": "Colorize selected iris pixels red while preserving luminance."
+    },
+    {
+      "type": "adjust_brightness_contrast",
+      "target": {
+        "layer_id": "layer_source"
+      },
+      "write_mask_id": "mask_iris_blue_write",
+      "params": {
+        "brightness": 0.13,
+        "contrast": 1.18
+      },
+      "description": "Boost the red iris luminance for a bright glowing look while retaining shade differences."
+    },
+    {
+      "type": "export_flat",
+      "params": {
+        "path": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_kernel.png"
+      },
+      "description": "Export final edited image."
+    }
+  ],
+  "metadata": {
+    "planner_mode": "manual_controller",
+    "deterministic": true
+  }
+}

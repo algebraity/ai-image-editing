@@ -1,0 +1,446 @@
+{
+  "schema_version": "ai_edit_actions.v1",
+  "id": "batch_change_the_eye_color_of_this_character_to_a_bright_glowing_red_keeping_the_difference_in_shades_brightness_currently_present_in_her_eyes_in_this_image",
+  "user_prompt": "Change the eye color of this character to a bright glowing red, keeping the difference in shades / brightness currently present in her eyes in this image.",
+  "description": "Select the blue iris tones in each eye, colorize them red while preserving luminance, then export.",
+  "stop_on_error": true,
+  "actions": [
+    {
+      "id": "action_001",
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_left_iris_dark"
+      },
+      "params": {
+        "name": "left iris dark blue",
+        "color": "#294766",
+        "tolerance": 0.18,
+        "bbox_xyxy": [
+          430,
+          270,
+          710,
+          575
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "preconditions": {
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "left iris dark blue"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Select darker blue pixels in viewer-left iris.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_002",
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_left_iris_light"
+      },
+      "params": {
+        "name": "left iris light blue",
+        "color": "#7EABBB",
+        "tolerance": 0.2,
+        "bbox_xyxy": [
+          430,
+          270,
+          710,
+          575
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "preconditions": {
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "left iris light blue"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Select lighter blue pixels in viewer-left iris.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_003",
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_right_iris_dark"
+      },
+      "params": {
+        "name": "right iris dark blue",
+        "color": "#294766",
+        "tolerance": 0.18,
+        "bbox_xyxy": [
+          930,
+          235,
+          1195,
+          500
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "preconditions": {
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "right iris dark blue"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Select darker blue pixels in viewer-right iris.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_004",
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "layer_source",
+        "mask_id": "mask_right_iris_light"
+      },
+      "params": {
+        "name": "right iris light blue",
+        "color": "#7EABBB",
+        "tolerance": 0.2,
+        "bbox_xyxy": [
+          930,
+          235,
+          1195,
+          500
+        ],
+        "alpha_min": 0.9,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "preconditions": {
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "right iris light blue"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Select lighter blue pixels in viewer-right iris.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_005",
+      "type": "combine_masks",
+      "target": {
+        "mask_id": "mask_iris_blue_union"
+      },
+      "params": {
+        "name": "combined blue iris mask",
+        "operation": "union",
+        "mask_ids": [
+          "mask_left_iris_dark",
+          "mask_left_iris_light",
+          "mask_right_iris_dark",
+          "mask_right_iris_light"
+        ]
+      },
+      "preconditions": {
+        "required_layer_ids": [],
+        "required_mask_ids": [
+          "mask_left_iris_dark",
+          "mask_left_iris_light",
+          "mask_right_iris_dark",
+          "mask_right_iris_light"
+        ],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "combined blue iris mask"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Union all selected iris tone masks.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_006",
+      "type": "remove_small_islands",
+      "target": {
+        "mask_id": "mask_iris_blue_clean"
+      },
+      "params": {
+        "source_mask_id": "mask_iris_blue_union",
+        "name": "cleaned iris mask",
+        "min_area": 40,
+        "set_active": false
+      },
+      "preconditions": {
+        "required_layer_ids": [],
+        "required_mask_ids": [
+          "mask_iris_blue_union"
+        ],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "cleaned iris mask"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Remove tiny isolated selections.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_007",
+      "type": "feather_mask",
+      "target": {
+        "mask_id": "mask_iris_blue_write"
+      },
+      "params": {
+        "source_mask_id": "mask_iris_blue_clean",
+        "name": "soft iris write mask",
+        "radius": 0.65
+      },
+      "preconditions": {
+        "required_layer_ids": [],
+        "required_mask_ids": [
+          "mask_iris_blue_clean"
+        ],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "soft iris write mask"
+        ],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Soften mask edges for antialiasing.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_008",
+      "type": "colorize",
+      "target": {
+        "layer_id": "layer_source"
+      },
+      "write_mask_id": "mask_iris_blue_write",
+      "params": {
+        "color": "#ff0000",
+        "amount": 1.0
+      },
+      "preconditions": {
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [
+          "mask_iris_blue_write"
+        ],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Colorize selected iris pixels red while preserving luminance.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_009",
+      "type": "adjust_brightness_contrast",
+      "target": {
+        "layer_id": "layer_source"
+      },
+      "write_mask_id": "mask_iris_blue_write",
+      "params": {
+        "brightness": 0.13,
+        "contrast": 1.18
+      },
+      "preconditions": {
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [
+          "mask_iris_blue_write"
+        ],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Boost the red iris luminance for a bright glowing look while retaining shade differences.",
+      "created_by": "planner",
+      "metadata": {}
+    },
+    {
+      "id": "action_010",
+      "type": "export_flat",
+      "target": {},
+      "params": {
+        "path": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_kernel.png"
+      },
+      "preconditions": {
+        "required_layer_ids": [],
+        "required_mask_ids": [],
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "allow_hidden_layers": false,
+        "custom": {}
+      },
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "protected_mask_id": null,
+        "geometry_expectations": {},
+        "visual_expectations": {},
+        "custom": {}
+      },
+      "description": "Export final edited image.",
+      "created_by": "planner",
+      "metadata": {}
+    }
+  ],
+  "metadata": {
+    "planner_mode": "manual_controller",
+    "deterministic": true
+  }
+}

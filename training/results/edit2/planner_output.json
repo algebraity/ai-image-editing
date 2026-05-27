@@ -1,0 +1,352 @@
+{
+  "schema_version": "ai_edit_planner_output.v1",
+  "description": "Remove background alpha, recolor clips purple and hair darker brown while preserving luminance.",
+  "stop_on_error": true,
+  "actions": [
+    {
+      "type": "magic_wand_select",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_bg_raw"
+      },
+      "params": {
+        "name": "background selection",
+        "seed_points": [
+          [
+            10,
+            10
+          ],
+          [
+            1910,
+            10
+          ],
+          [
+            10,
+            1190
+          ],
+          [
+            1910,
+            1190
+          ],
+          [
+            1600,
+            600
+          ],
+          [
+            1500,
+            100
+          ],
+          [
+            100,
+            900
+          ],
+          [
+            1700,
+            1000
+          ],
+          [
+            1560,
+            1050
+          ]
+        ],
+        "tolerance": 0.12,
+        "alpha_min": 0.0,
+        "diagonal": true,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select the contiguous pink background."
+    },
+    {
+      "type": "refine_selection",
+      "target": {
+        "mask_id": "mask_bg_refined"
+      },
+      "params": {
+        "source_mask_id": "mask_bg_raw",
+        "name": "background clear mask",
+        "grow_pixels": 1,
+        "feather_radius": 0.5,
+        "set_active": false
+      },
+      "description": "Slightly grow and soften the background edge."
+    },
+    {
+      "type": "clear_region",
+      "target": {
+        "layer_id": "base"
+      },
+      "write_mask_id": "mask_bg_refined",
+      "params": {
+        "mode": "rgba_to_zero"
+      },
+      "description": "Clear selected background to transparency."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_hair_base"
+      },
+      "params": {
+        "name": "hair base gold",
+        "color": "#E8B566",
+        "tolerance": 0.1,
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select base blonde hair tones."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_hair_shadow"
+      },
+      "params": {
+        "name": "hair shadow orange",
+        "color": "#D5885D",
+        "tolerance": 0.11,
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select hair shadow tones."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_hair_mid"
+      },
+      "params": {
+        "name": "hair mid gold",
+        "color": "#F2C360",
+        "tolerance": 0.1,
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select mid/highlight blonde tones."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_hair_highlight"
+      },
+      "params": {
+        "name": "hair pale highlight",
+        "color": "#FFF0A0",
+        "tolerance": 0.08,
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select pale hair highlights."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_hair_deep"
+      },
+      "params": {
+        "name": "deep hair orange",
+        "color": "#C77D4B",
+        "tolerance": 0.1,
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select deeper orange hair tones."
+    },
+    {
+      "type": "combine_masks",
+      "target": {
+        "mask_id": "mask_hair_combined"
+      },
+      "params": {
+        "operation": "union",
+        "mask_ids": [
+          "mask_hair_base",
+          "mask_hair_shadow",
+          "mask_hair_mid",
+          "mask_hair_highlight",
+          "mask_hair_deep"
+        ],
+        "name": "combined hair mask"
+      },
+      "description": "Combine hair tone masks."
+    },
+    {
+      "type": "refine_selection",
+      "target": {
+        "mask_id": "mask_hair_refined"
+      },
+      "params": {
+        "source_mask_id": "mask_hair_combined",
+        "name": "hair recolor mask",
+        "min_area": 20,
+        "feather_radius": 0.35,
+        "set_active": false
+      },
+      "description": "Clean and slightly soften the hair recolor mask."
+    },
+    {
+      "type": "colorize",
+      "target": {
+        "layer_id": "base"
+      },
+      "write_mask_id": "mask_hair_refined",
+      "params": {
+        "color": "#8A4A20",
+        "amount": 1.0
+      },
+      "description": "Colorize the selected hair brown while preserving luminance."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_clips_pink1"
+      },
+      "params": {
+        "name": "pink hair clips",
+        "color": "#D36BA0",
+        "tolerance": 0.13,
+        "bbox_xyxy": [
+          900,
+          40,
+          1260,
+          230
+        ],
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select pink clip body pixels."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_clips_pink2"
+      },
+      "params": {
+        "name": "clip pink shade",
+        "color": "#B77A9B",
+        "tolerance": 0.1,
+        "bbox_xyxy": [
+          900,
+          40,
+          1260,
+          230
+        ],
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select darker clip shade pixels."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_clips_light"
+      },
+      "params": {
+        "name": "clip light pink",
+        "color": "#F8A5CF",
+        "tolerance": 0.13,
+        "bbox_xyxy": [
+          900,
+          40,
+          1260,
+          230
+        ],
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select light pink clip highlight pixels."
+    },
+    {
+      "type": "select_color_range",
+      "target": {
+        "layer_id": "base",
+        "mask_id": "mask_clips_midlight"
+      },
+      "params": {
+        "name": "clip mid light pink",
+        "color": "#EAA8C8",
+        "tolerance": 0.12,
+        "bbox_xyxy": [
+          900,
+          40,
+          1260,
+          230
+        ],
+        "alpha_min": 0.5,
+        "kind": "write_guard",
+        "set_active": false
+      },
+      "description": "Select additional light pink clip pixels."
+    },
+    {
+      "type": "combine_masks",
+      "target": {
+        "mask_id": "mask_clips_combined"
+      },
+      "params": {
+        "operation": "union",
+        "mask_ids": [
+          "mask_clips_pink1",
+          "mask_clips_pink2",
+          "mask_clips_light",
+          "mask_clips_midlight"
+        ],
+        "name": "combined clip mask"
+      },
+      "description": "Combine clip masks."
+    },
+    {
+      "type": "refine_selection",
+      "target": {
+        "mask_id": "mask_clips_refined"
+      },
+      "params": {
+        "source_mask_id": "mask_clips_combined",
+        "name": "clip recolor mask",
+        "min_area": 5,
+        "feather_radius": 0.25,
+        "set_active": false
+      },
+      "description": "Clean clip mask."
+    },
+    {
+      "type": "colorize",
+      "target": {
+        "layer_id": "base"
+      },
+      "write_mask_id": "mask_clips_refined",
+      "params": {
+        "color": "#A020FF",
+        "amount": 1.0
+      },
+      "description": "Colorize the selected clips purple while preserving luminance."
+    },
+    {
+      "type": "export_flat",
+      "params": {
+        "path": "/mnt/data/ai_image_editing/kirikawaii_transparent_brown_hair_purple_clips_kernel.png"
+      },
+      "description": "Export final transparent PNG."
+    }
+  ],
+  "metadata": {
+    "source": "manual_planner_output",
+    "task_type": "deterministic_recolor_and_background_removal"
+  }
+}

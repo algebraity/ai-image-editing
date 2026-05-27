@@ -1,0 +1,220 @@
+{
+  "success": true,
+  "output_image": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_kernel.png",
+  "trace_dir": "/mnt/data/ai_image_editing/eye_red_kernel_trace/session_2026_05_27_172724_9396ba79",
+  "manifest": "/mnt/data/ai_image_editing/eye_red_kernel_trace/session_2026_05_27_172724_9396ba79/manifest.json",
+  "events": "/mnt/data/ai_image_editing/eye_red_kernel_trace/session_2026_05_27_172724_9396ba79/events.jsonl",
+  "training_example": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_training_example.json",
+  "planner_request": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_planner_request.json",
+  "planner_output": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_planner_output.json",
+  "action_batch": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_action_batch.json",
+  "action_results": [
+    {
+      "action_id": "action_001",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 0,
+      "after_revision": 1,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_left_iris_dark"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_002",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 1,
+      "after_revision": 2,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_left_iris_light"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_003",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 2,
+      "after_revision": 3,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_right_iris_dark"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_004",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 3,
+      "after_revision": 4,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_right_iris_light"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_005",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 4,
+      "after_revision": 5,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_iris_blue_union"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_006",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 5,
+      "after_revision": 6,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_iris_blue_clean"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_007",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 6,
+      "after_revision": 7,
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_iris_blue_write"
+      ],
+      "changed_layer_ids": [],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_008",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 7,
+      "after_revision": 8,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [
+        "layer_source"
+      ],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_009",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 8,
+      "after_revision": 9,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [
+        "layer_source"
+      ],
+      "output_assets": {},
+      "metadata": {}
+    },
+    {
+      "action_id": "action_010",
+      "status": "executed",
+      "document_id": "doc_kirikawaii_red_eyes",
+      "before_revision": 9,
+      "after_revision": 9,
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "changed_layer_ids": [],
+      "output_assets": {
+        "path": "/mnt/data/ai_image_editing/kirikawaii_red_eyes_kernel.png",
+        "format": "png"
+      },
+      "metadata": {}
+    }
+  ],
+  "final_revision": 9,
+  "mask_stats": {
+    "mask_left_iris_dark": {
+      "area_pixels": 10563,
+      "bbox": [
+        453,
+        323,
+        224,
+        216
+      ]
+    },
+    "mask_left_iris_light": {
+      "area_pixels": 4856,
+      "bbox": [
+        454,
+        324,
+        223,
+        215
+      ]
+    },
+    "mask_right_iris_dark": {
+      "area_pixels": 13095,
+      "bbox": [
+        936,
+        240,
+        244,
+        219
+      ]
+    },
+    "mask_right_iris_light": {
+      "area_pixels": 7964,
+      "bbox": [
+        937,
+        240,
+        258,
+        219
+      ]
+    },
+    "mask_iris_blue_union": {
+      "area_pixels": 36478,
+      "bbox": [
+        453,
+        240,
+        742,
+        299
+      ]
+    },
+    "mask_iris_blue_clean": {
+      "area_pixels": 36084,
+      "bbox": [
+        544,
+        269,
+        614,
+        270
+      ]
+    },
+    "mask_iris_blue_write": {
+      "area_pixels": 41290,
+      "bbox": [
+        541,
+        266,
+        620,
+        276
+      ]
+    }
+  }
+}
