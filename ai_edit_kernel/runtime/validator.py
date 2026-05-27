@@ -16,6 +16,7 @@ import numpy as np
 
 from ai_edit_kernel.document.document_state import DocumentState
 from ai_edit_kernel.document.mask import Mask
+from ai_edit_kernel.region import max_delta_outside_mask
 from ai_edit_kernel.schema.actions import Action, ActionResult
 
 
@@ -384,13 +385,7 @@ class Validator:
             )
             return report
 
-        protected = write_mask.data <= 0.0
-        if not bool(np.any(protected)):
-            report.metrics["max_protected_delta"] = 0.0
-            return report
-
-        deltas = np.abs(after_pixels[protected] - before_pixels[protected])
-        max_delta = float(deltas.max()) if deltas.size else 0.0
+        max_delta = max_delta_outside_mask(before_pixels, after_pixels, write_mask.data)
         report.metrics["max_protected_delta"] = max_delta
         if max_delta > tolerance:
             report.add_issue(

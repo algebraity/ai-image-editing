@@ -219,3 +219,9 @@ __marimo__/
 
 # Test artifacts
 artifacts/
+
+# API keys etc.
+keys/
+venice-key
+openai-key
+anthropic-key

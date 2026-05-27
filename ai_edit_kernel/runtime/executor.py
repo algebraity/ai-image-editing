@@ -27,6 +27,18 @@ except ImportError:  # pragma: no cover - exercised only when SciPy is absent
 from ai_edit_kernel.document.document_state import CanvasSpec, ColorSpace, DocumentMetadata, DocumentState
 from ai_edit_kernel.document.layer import BlendMode, Layer, LayerKind
 from ai_edit_kernel.document.mask import Mask, MaskKind
+from ai_edit_kernel.region import (
+    apply_write_mask as _region_apply_write_mask,
+    bbox_from_mask as _region_bbox_from_mask,
+    bbox_from_xyxy as _region_bbox_from_xyxy,
+    content_bbox_rgba as _region_content_bbox_rgba,
+    extract_mask as _region_extract_mask,
+    extract_rgba as _region_extract_rgba,
+    multiply_alpha_by_mask as _region_multiply_alpha_by_mask,
+    paste_crop as _region_paste_crop,
+    rect_mask as _region_rect_mask,
+    resolve_region_mask as _region_resolve_mask,
+)
 from ai_edit_kernel.runtime.validator import ValidationReport, Validator
 from ai_edit_kernel.schema.actions import Action, ActionBatch, ActionError, ActionResult, ActionStatus, ActionType
 
@@ -276,20 +288,8 @@ class Executor:
 
     def apply_write_mask(self, before_pixels: Any, proposed_pixels: Any, write_mask_id: str, document: DocumentState) -> Any:
         """Blend proposed pixels into old pixels only where the write mask allows."""
-        if not isinstance(before_pixels, np.ndarray) or not isinstance(proposed_pixels, np.ndarray):
-            raise TypeError("before_pixels and proposed_pixels must be NumPy arrays")
-        if before_pixels.shape != proposed_pixels.shape:
-            raise ValueError("before_pixels and proposed_pixels must have the same shape")
-        if before_pixels.ndim != 3 or before_pixels.shape[2] != 4:
-            raise ValueError("pixel arrays must have shape H x W x 4")
-
         mask = document.get_mask(write_mask_id)
-        if mask.data.shape != before_pixels.shape[:2]:
-            raise ValueError("write mask shape must match pixel array dimensions")
-
-        alpha = mask.data[..., np.newaxis].astype(np.float32, copy=False)
-        blended = before_pixels * (1.0 - alpha) + proposed_pixels * alpha
-        return np.clip(blended, 0.0, 1.0).astype(np.float32)
+        return _region_apply_write_mask(before_pixels, proposed_pixels, mask.data)
 
     def create_rollback_snapshot(self, document: DocumentState) -> DocumentState:
         """Create a deep snapshot for action-level rollback."""
@@ -371,17 +371,18 @@ class Executor:
     def _execute_crop(self, document: DocumentState, action: Action) -> ActionResult:
         """Crop the whole document or clear outside a crop on one layer or mask."""
         scope = action.params.get("scope", "document")
-        x0, y0, x1, y1 = _bbox_to_ints(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
+        bbox = _region_bbox_from_xyxy(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
+        y_slice, x_slice = bbox.to_slices()
         if scope == "document":
             old_size = [document.canvas.width, document.canvas.height]
             for layer in document.layers:
                 if layer.pixels is not None:
-                    layer.pixels = np.array(layer.pixels[y0:y1, x0:x1, :], dtype=np.float32, copy=True)
+                    layer.pixels = _region_extract_rgba(layer.pixels, bbox)
             for mask in document.masks.values():
-                mask.data = np.array(mask.data[y0:y1, x0:x1], dtype=np.float32, copy=True)
+                mask.data = _region_extract_mask(mask.data, bbox)
             document.canvas = CanvasSpec(
-                width=x1 - x0,
-                height=y1 - y0,
+                width=bbox.width,
+                height=bbox.height,
                 color_space=document.canvas.color_space,
                 background_color_rgba=document.canvas.background_color_rgba,
                 dpi=document.canvas.dpi,
@@ -391,7 +392,7 @@ class Executor:
                 status=ActionStatus.EXECUTED,
                 changed_layer_ids=[layer.id for layer in document.layers],
                 created_mask_ids=[],
-                metadata={"scope": scope, "old_size": old_size, "new_size": [x1 - x0, y1 - y0]},
+                metadata={"scope": scope, "old_size": old_size, "new_size": [bbox.width, bbox.height]},
             )
 
         if scope == "layer":
@@ -401,14 +402,14 @@ class Executor:
             fill_color = _parse_color(action.params.get("fill_color", "#00000000"))
             cropped = np.zeros_like(layer.pixels)
             cropped[..., :] = fill_color
-            cropped[y0:y1, x0:x1, :] = layer.pixels[y0:y1, x0:x1, :]
+            cropped[y_slice, x_slice, :] = layer.pixels[y_slice, x_slice, :]
             layer.pixels = cropped
             return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id], metadata={"scope": scope})
 
         if scope == "mask":
             mask = document.get_mask(_required_target(action.target.mask_id, "target.mask_id"))
             cropped = np.zeros_like(mask.data)
-            cropped[y0:y1, x0:x1] = mask.data[y0:y1, x0:x1]
+            cropped[y_slice, x_slice] = mask.data[y_slice, x_slice]
             mask.data = cropped.astype(np.float32, copy=False)
             return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[], metadata={"scope": scope, "changed_mask_id": mask.id})
 
@@ -764,7 +765,7 @@ class Executor:
     def _execute_select_rect(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a rectangular selection mask and optionally make it active."""
         mask_id = _required_target(action.target.mask_id, "target.mask_id")
-        data = _rect_mask(document.canvas.width, document.canvas.height, action.params["bbox_xyxy"])
+        data = _region_rect_mask(document.canvas.width, document.canvas.height, action.params["bbox_xyxy"])
         mask = Mask(
             id=mask_id,
             name=action.params.get("name", mask_id),
@@ -792,8 +793,9 @@ class Executor:
         )
         if "bbox_xyxy" in action.params:
             constrained = np.zeros_like(data)
-            x0, y0, x1, y1 = _bbox_to_ints(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
-            constrained[y0:y1, x0:x1] = data[y0:y1, x0:x1]
+            bbox = _region_bbox_from_xyxy(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
+            y_slice, x_slice = bbox.to_slices()
+            constrained[y_slice, x_slice] = data[y_slice, x_slice]
             data = constrained
         mask = Mask(
             id=mask_id,
@@ -1426,11 +1428,15 @@ class Executor:
         if not isinstance(clipboard, dict) or not isinstance(clipboard.get("pixels"), np.ndarray):
             raise ValueError("paste requires clipboard pixels created by copy or cut")
         output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
-        pixels = np.zeros((document.canvas.height, document.canvas.width, 4), dtype=np.float32)
         clip = clipboard["pixels"]
         x = int(action.params.get("x", clipboard["bbox_xyxy"][0]))
         y = int(action.params.get("y", clipboard["bbox_xyxy"][1]))
-        _paste_pixels(pixels, clip, x, y)
+        pixels = _region_paste_crop(
+            np.zeros((document.canvas.height, document.canvas.width, 4), dtype=np.float32),
+            clip,
+            x,
+            y,
+        )
         layer = Layer(
             id=output_id,
             name=action.params.get("name", "Pasted Layer"),
@@ -2040,10 +2046,8 @@ def _require_pixel_layer(layer: Layer) -> None:
 
 def _content_bbox(pixels: np.ndarray, threshold: float = 0.0) -> Optional[tuple[int, int, int, int]]:
     """Return half-open bbox around alpha greater than threshold."""
-    ys, xs = np.nonzero(pixels[..., 3] > threshold)
-    if xs.size == 0:
-        return None
-    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    bbox = _region_content_bbox_rgba(pixels, threshold)
+    return None if bbox is None else bbox.as_tuple()
 
 
 def _anchor_point(value: Any, width: int, height: int) -> tuple[float, float]:
@@ -2268,41 +2272,29 @@ def _point_to_float_pair(point: Any) -> tuple[float, float]:
 
 def _region_mask(document: DocumentState, params: dict[str, Any]) -> np.ndarray:
     """Return a full-canvas mask from params, active selection, or full canvas."""
-    if "source_mask_id" in params:
-        return np.array(document.get_mask(params["source_mask_id"]).data, dtype=np.float32, copy=True)
-    if "bbox_xyxy" in params:
-        return _rect_mask(document.canvas.width, document.canvas.height, params["bbox_xyxy"])
-    if document.active_selection_mask_id is not None:
-        return np.array(document.get_mask(document.active_selection_mask_id).data, dtype=np.float32, copy=True)
-    return np.ones((document.canvas.height, document.canvas.width), dtype=np.float32)
+    return _region_resolve_mask(
+        document,
+        mask_id=params.get("source_mask_id"),
+        bbox=params.get("bbox_xyxy"),
+        use_active_selection=True,
+        default_full_canvas=True,
+    )
 
 
 def _copy_region_pixels(document: DocumentState, layer: Layer, params: dict[str, Any]) -> tuple[np.ndarray, list[int]]:
     """Copy a region from a layer into a cropped RGBA array."""
     mask = _region_mask(document, params)
-    ys, xs = np.nonzero(mask > 0.0)
-    if xs.size == 0:
+    bbox = _region_bbox_from_mask(mask)
+    if bbox is None:
         raise ValueError("cannot copy an empty region")
-    x0, x1 = int(xs.min()), int(xs.max()) + 1
-    y0, y1 = int(ys.min()), int(ys.max()) + 1
-    pixels = np.array(layer.pixels[y0:y1, x0:x1, :], copy=True)
-    pixels[..., 3] *= mask[y0:y1, x0:x1]
-    return pixels.astype(np.float32), [x0, y0, x1, y1]
+    pixels = _region_extract_rgba(layer.pixels, bbox)
+    mask_crop = _region_extract_mask(mask, bbox)
+    return _region_multiply_alpha_by_mask(pixels, mask_crop), bbox.as_list()
 
 
 def _paste_pixels(destination: np.ndarray, source: np.ndarray, x: int, y: int) -> None:
     """Paste cropped source pixels into full-canvas destination at x/y."""
-    height, width = destination.shape[:2]
-    src_h, src_w = source.shape[:2]
-    dst_x0 = max(0, x)
-    dst_y0 = max(0, y)
-    src_x0 = max(0, -x)
-    src_y0 = max(0, -y)
-    copy_w = min(src_w - src_x0, width - dst_x0)
-    copy_h = min(src_h - src_y0, height - dst_y0)
-    if copy_w <= 0 or copy_h <= 0:
-        raise ValueError("pasted pixels do not intersect the canvas")
-    destination[dst_y0 : dst_y0 + copy_h, dst_x0 : dst_x0 + copy_w, :] = source[src_y0 : src_y0 + copy_h, src_x0 : src_x0 + copy_w, :]
+    destination[..., :] = _region_paste_crop(destination, source, x, y)
 
 
 def _render_text_pixels(width: int, height: int, params: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
@@ -3165,29 +3157,12 @@ def _parse_color(value: Any) -> tuple[float, float, float, float]:
 
 def _bbox_to_ints(bbox: Any, width: int, height: int) -> tuple[int, int, int, int]:
     """Validate and convert half-open bbox coordinates to integers."""
-    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
-        raise TypeError("bbox_xyxy must be a four-number list")
-    coords = []
-    for value in bbox:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError("bbox_xyxy entries must be numbers")
-        if float(value) != int(value):
-            raise ValueError("prototype bbox_xyxy entries must be integer pixel coordinates")
-        coords.append(int(value))
-    x0, y0, x1, y1 = coords
-    if x1 <= x0 or y1 <= y0:
-        raise ValueError("bbox_xyxy must satisfy x1 > x0 and y1 > y0")
-    if x0 < 0 or y0 < 0 or x1 > width or y1 > height:
-        raise ValueError("bbox_xyxy must be inside the canvas")
-    return x0, y0, x1, y1
+    return _region_bbox_from_xyxy(bbox, width, height).as_tuple()
 
 
 def _rect_mask(width: int, height: int, bbox: Any) -> np.ndarray:
     """Rasterize a hard rectangle mask."""
-    x0, y0, x1, y1 = _bbox_to_ints(bbox, width, height)
-    data = np.zeros((height, width), dtype=np.float32)
-    data[y0:y1, x0:x1] = 1.0
-    return data
+    return _region_rect_mask(width, height, bbox)
 
 
 def _color_range_mask(
