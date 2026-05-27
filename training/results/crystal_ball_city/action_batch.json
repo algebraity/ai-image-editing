@@ -1,0 +1,447 @@
+{
+  "actions": [
+    {
+      "created_by": "planner",
+      "description": "Select the visible glass sphere with an ellipse.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "crystal ball outer ellipse"
+        ],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_001",
+      "metadata": {},
+      "params": {
+        "kind": "diffusion",
+        "name": "crystal ball outer ellipse",
+        "set_active": false,
+        "shape": {
+          "bbox_xyxy": [
+            116,
+            26,
+            484,
+            394
+          ],
+          "type": "ellipse"
+        }
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": []
+      },
+      "target": {
+        "mask_id": "mask_crystal_ball_outer"
+      },
+      "type": "create_mask_from_shape"
+    },
+    {
+      "created_by": "planner",
+      "description": "Move the write area inward to protect the glass rim and base.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "safe crystal ball interior"
+        ],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_002",
+      "metadata": {},
+      "params": {
+        "name": "safe crystal ball interior",
+        "pixels": 18,
+        "set_active": false,
+        "source_mask_id": "mask_crystal_ball_outer"
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": [
+          "mask_crystal_ball_outer"
+        ]
+      },
+      "target": {
+        "mask_id": "mask_crystal_ball_interior"
+      },
+      "type": "shrink_mask"
+    },
+    {
+      "created_by": "planner",
+      "description": "Soften the transition from generated city pixels to the original glass.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "soft crystal ball write mask"
+        ],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_003",
+      "metadata": {},
+      "params": {
+        "name": "soft crystal ball write mask",
+        "radius": 3.0,
+        "source_mask_id": "mask_crystal_ball_interior"
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": [
+          "mask_crystal_ball_interior"
+        ]
+      },
+      "target": {
+        "mask_id": "mask_crystal_ball_write"
+      },
+      "type": "feather_mask"
+    },
+    {
+      "created_by": "planner",
+      "description": "Ask Venice only for a city image candidate; the kernel clips it into the mask.",
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_source"
+        ],
+        "created_layer_names": [
+          "generated fantasy city"
+        ],
+        "created_mask_names": [],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_004",
+      "metadata": {},
+      "params": {
+        "job": {
+          "size": "1024x1024"
+        },
+        "mode": "new_layer",
+        "negative_prompt": "text, watermark, border, frame, modern city, people, outside the crystal ball",
+        "output_layer_name": "generated fantasy city",
+        "padding": 32,
+        "prompt": "a mysterious fantasy city skyline inside a crystal ball, visible dark castle towers and glowing windows in atmospheric haze, distant rooftops seen through glass, dreamlike mist, soft cinematic light, painterly fantasy concept art, no text, no watermark"
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [
+          "layer_source"
+        ],
+        "required_mask_ids": [
+          "mask_crystal_ball_write"
+        ]
+      },
+      "target": {
+        "layer_id": "layer_source",
+        "output_layer_id": "layer_generated_city"
+      },
+      "type": "inpaint_region",
+      "write_mask_id": "mask_crystal_ball_write"
+    },
+    {
+      "created_by": "planner",
+      "description": "Select the bright glass highlight that should stay visibly glassy.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "upper left glass highlight"
+        ],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_005",
+      "metadata": {},
+      "params": {
+        "kind": "write_guard",
+        "name": "upper left glass highlight",
+        "set_active": false,
+        "shape": {
+          "bbox_xyxy": [
+            145,
+            42,
+            305,
+            142
+          ],
+          "type": "ellipse"
+        }
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": []
+      },
+      "target": {
+        "mask_id": "mask_glass_highlight"
+      },
+      "type": "create_mask_from_shape"
+    },
+    {
+      "created_by": "planner",
+      "description": "Soften the preserved highlight mask.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [
+          "soft glass highlight"
+        ],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_006",
+      "metadata": {},
+      "params": {
+        "name": "soft glass highlight",
+        "radius": 1.5,
+        "source_mask_id": "mask_glass_highlight"
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": [
+          "mask_glass_highlight"
+        ]
+      },
+      "target": {
+        "mask_id": "mask_glass_highlight_soft"
+      },
+      "type": "feather_mask"
+    },
+    {
+      "created_by": "planner",
+      "description": "Make the generated city silhouettes more readable while retaining haze.",
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_generated_city"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_007",
+      "metadata": {},
+      "params": {
+        "brightness": -0.04,
+        "contrast": 1.38
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [
+          "layer_generated_city"
+        ],
+        "required_mask_ids": [
+          "mask_crystal_ball_write"
+        ]
+      },
+      "target": {
+        "layer_id": "layer_generated_city"
+      },
+      "type": "adjust_brightness_contrast",
+      "write_mask_id": "mask_crystal_ball_write"
+    },
+    {
+      "created_by": "planner",
+      "description": "Remove generated pixels from the main highlight so original glass remains visible.",
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_generated_city"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_008",
+      "metadata": {},
+      "params": {
+        "mode": "alpha_to_zero",
+        "preserve_rgb": false
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [
+          "layer_generated_city"
+        ],
+        "required_mask_ids": [
+          "mask_glass_highlight_soft"
+        ]
+      },
+      "target": {
+        "layer_id": "layer_generated_city"
+      },
+      "type": "clear_region",
+      "write_mask_id": "mask_glass_highlight_soft"
+    },
+    {
+      "created_by": "planner",
+      "description": "Blend the generated city through the pale crystal ball glass.",
+      "expected_result": {
+        "changed_layer_ids": [
+          "layer_generated_city"
+        ],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_009",
+      "metadata": {},
+      "params": {
+        "opacity": 0.94
+      },
+      "preconditions": {
+        "allow_hidden_layers": true,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [
+          "layer_generated_city"
+        ],
+        "required_mask_ids": []
+      },
+      "target": {
+        "layer_id": "layer_generated_city"
+      },
+      "type": "set_layer_opacity"
+    },
+    {
+      "created_by": "planner",
+      "description": "Export the final flattened edit.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_010",
+      "metadata": {},
+      "params": {
+        "path": "training/results/crystal_ball_city/final_image.png"
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": []
+      },
+      "target": {},
+      "type": "export_flat"
+    },
+    {
+      "created_by": "planner",
+      "description": "Export layers, masks, preview, and document metadata for inspection.",
+      "expected_result": {
+        "changed_layer_ids": [],
+        "created_layer_names": [],
+        "created_mask_names": [],
+        "custom": {},
+        "geometry_expectations": {},
+        "protected_mask_id": null,
+        "visual_expectations": {}
+      },
+      "id": "action_011",
+      "metadata": {},
+      "params": {
+        "include_hidden": true,
+        "include_preview": true,
+        "overwrite": true,
+        "path": "training/results/crystal_ball_city/layered_bundle"
+      },
+      "preconditions": {
+        "allow_hidden_layers": false,
+        "custom": {},
+        "require_active_layer": false,
+        "require_active_selection": false,
+        "require_unlocked_target_layer": true,
+        "require_write_mask": true,
+        "required_layer_ids": [],
+        "required_mask_ids": []
+      },
+      "target": {},
+      "type": "export_layered_bundle"
+    }
+  ],
+  "description": "Generate a mysterious fantasy city as candidate pixels, then let the kernel mask it into the crystal ball.",
+  "id": "batch_create_a_hazy_image_of_a_mysterious_fantasy_city_inside_of_the_crystal_ball",
+  "metadata": {
+    "kernel_controls_selection_and_compositing": true,
+    "planner_mode": "manual_model_surrogate",
+    "venice_model": "krea-v2-medium"
+  },
+  "schema_version": "ai_edit_actions.v1",
+  "stop_on_error": true,
+  "user_prompt": "create a hazy image of a mysterious fantasy city inside of the crystal ball"
+}

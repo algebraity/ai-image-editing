@@ -1,0 +1,141 @@
+{
+  "active_layer_id": "layer_generated_city",
+  "active_selection_mask_id": null,
+  "canvas": {
+    "background_color_rgba": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "color_space": "srgb",
+    "dpi": null,
+    "height": 600,
+    "width": 600
+  },
+  "document_id": "doc_crystal_ball_city",
+  "document_revision": 9,
+  "document_snapshot": "document_snapshot.json",
+  "layers": [
+    {
+      "blend_mode": "normal",
+      "id": "layer_source",
+      "index": 0,
+      "kind": "raster",
+      "mask_id": null,
+      "name": "source crystal ball",
+      "opacity": 1.0,
+      "pixels": {
+        "format": "png",
+        "path": "layers/layer_0000_layer_source.png",
+        "shape": [
+          600,
+          600,
+          4
+        ]
+      },
+      "visible": true
+    },
+    {
+      "blend_mode": "normal",
+      "id": "layer_generated_city",
+      "index": 1,
+      "kind": "raster",
+      "mask_id": null,
+      "name": "generated fantasy city",
+      "opacity": 0.94,
+      "pixels": {
+        "format": "png",
+        "path": "layers/layer_0001_layer_generated_city.png",
+        "shape": [
+          600,
+          600,
+          4
+        ]
+      },
+      "visible": true
+    }
+  ],
+  "masks": [
+    {
+      "data": {
+        "format": "png",
+        "path": "masks/mask_crystal_ball_outer.png",
+        "shape": [
+          600,
+          600
+        ]
+      },
+      "hard": true,
+      "id": "mask_crystal_ball_outer",
+      "kind": "diffusion",
+      "name": "crystal ball outer ellipse",
+      "source": "action_001"
+    },
+    {
+      "data": {
+        "format": "png",
+        "path": "masks/mask_crystal_ball_interior.png",
+        "shape": [
+          600,
+          600
+        ]
+      },
+      "hard": true,
+      "id": "mask_crystal_ball_interior",
+      "kind": "diffusion",
+      "name": "safe crystal ball interior",
+      "source": "action_001"
+    },
+    {
+      "data": {
+        "format": "png",
+        "path": "masks/mask_crystal_ball_write.png",
+        "shape": [
+          600,
+          600
+        ]
+      },
+      "hard": false,
+      "id": "mask_crystal_ball_write",
+      "kind": "diffusion",
+      "name": "soft crystal ball write mask",
+      "source": "action_001"
+    },
+    {
+      "data": {
+        "format": "png",
+        "path": "masks/mask_glass_highlight.png",
+        "shape": [
+          600,
+          600
+        ]
+      },
+      "hard": true,
+      "id": "mask_glass_highlight",
+      "kind": "write_guard",
+      "name": "upper left glass highlight",
+      "source": "action_005"
+    },
+    {
+      "data": {
+        "format": "png",
+        "path": "masks/mask_glass_highlight_soft.png",
+        "shape": [
+          600,
+          600
+        ]
+      },
+      "hard": false,
+      "id": "mask_glass_highlight_soft",
+      "kind": "write_guard",
+      "name": "soft glass highlight",
+      "source": "action_005"
+    }
+  ],
+  "preview": {
+    "format": "png",
+    "path": "preview.png"
+  },
+  "schema_version": "ai_edit_layered_bundle.v1"
+}

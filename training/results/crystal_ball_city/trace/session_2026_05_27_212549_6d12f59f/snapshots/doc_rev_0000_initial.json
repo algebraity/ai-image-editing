@@ -1,0 +1,71 @@
+{
+  "active_layer_id": "layer_source",
+  "active_selection_mask_id": null,
+  "annotations": {},
+  "canvas": {
+    "background_color_rgba": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "color_space": "srgb",
+    "dpi": null,
+    "height": 600,
+    "width": 600
+  },
+  "id": "doc_crystal_ball_city",
+  "layer_count": 1,
+  "layers": [
+    {
+      "blend_mode": "normal",
+      "child_layer_ids": [],
+      "has_pixels": true,
+      "height": 600,
+      "id": "layer_source",
+      "index": 0,
+      "kind": "raster",
+      "locks": {
+        "alpha_locked": false,
+        "fully_locked": false,
+        "pixels_locked": false,
+        "position_locked": false,
+        "visibility_locked": false
+      },
+      "mask_id": null,
+      "metadata": {},
+      "name": "source crystal ball",
+      "opacity": 1.0,
+      "parent_group_id": null,
+      "transform": {
+        "anchor_x": 0.5,
+        "anchor_y": 0.5,
+        "rotation_degrees": 0.0,
+        "scale_x": 1.0,
+        "scale_y": 1.0,
+        "x": 0.0,
+        "y": 0.0
+      },
+      "visible": true,
+      "width": 600
+    }
+  ],
+  "mask_count": 0,
+  "masks": [],
+  "metadata": {
+    "author": null,
+    "created_at": null,
+    "custom": {},
+    "source_file": "tests/crystal_ball.jpg",
+    "tags": [
+      "crystal_ball",
+      "diffusion",
+      "venice",
+      "planner_demo"
+    ],
+    "title": "Crystal ball city demo",
+    "updated_at": null
+  },
+  "revision": 0,
+  "schema_version": "ai_edit_document.v1"
+}

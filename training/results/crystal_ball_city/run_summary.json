@@ -1,0 +1,360 @@
+{
+  "action_batch": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/action_batch.json",
+  "action_results": [
+    {
+      "action_id": "action_001",
+      "after_revision": 1,
+      "before_revision": 0,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_crystal_ball_outer"
+      ],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_002",
+      "after_revision": 2,
+      "before_revision": 1,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_crystal_ball_interior"
+      ],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_003",
+      "after_revision": 3,
+      "before_revision": 2,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_crystal_ball_write"
+      ],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_004",
+      "after_revision": 4,
+      "before_revision": 3,
+      "changed_layer_ids": [],
+      "created_layer_ids": [
+        "layer_generated_city"
+      ],
+      "created_mask_ids": [],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {
+        "diffusion": {
+          "integration_mode": "new_layer",
+          "job": {
+            "arrays": {
+              "source_image": {
+                "dtype": "float32",
+                "max": 1.0,
+                "min": 0.0,
+                "shape": [
+                  420,
+                  420,
+                  4
+                ]
+              },
+              "source_mask": {
+                "dtype": "float32",
+                "max": 1.0,
+                "min": 0.0,
+                "shape": [
+                  420,
+                  420
+                ]
+              },
+              "target_pixels": {
+                "dtype": "float32",
+                "max": 1.0,
+                "min": 0.0,
+                "shape": [
+                  420,
+                  420,
+                  4
+                ]
+              }
+            },
+            "canvas": {
+              "height": 600,
+              "width": 600
+            },
+            "job_id": "action_004_inpaint_rev_0003",
+            "metadata": {
+              "action_id": "action_004",
+              "document_revision": 3
+            },
+            "operation": "inpaint",
+            "options": {
+              "backend": null,
+              "denoise": null,
+              "guidance_scale": null,
+              "job": {
+                "size": "1024x1024"
+              },
+              "mode": "new_layer",
+              "negative_prompt": "text, watermark, border, frame, modern city, people, outside the crystal ball",
+              "padding": 32,
+              "prompt": "a mysterious fantasy city skyline inside a crystal ball, visible dark castle towers and glowing windows in atmospheric haze, distant rooftops seen through glass, dreamlike mist, soft cinematic light, painterly fantasy concept art, no text, no watermark",
+              "seed": null,
+              "steps": null
+            },
+            "region": {
+              "canvas_size": [
+                600,
+                600
+              ],
+              "mask_bbox_xyxy": [
+                122,
+                32,
+                478,
+                388
+              ],
+              "mask_id": "mask_crystal_ball_write",
+              "padded_bbox_xyxy": [
+                90,
+                0,
+                510,
+                420
+              ],
+              "paste_bbox_xyxy": [
+                90,
+                0,
+                510,
+                420
+              ]
+            }
+          },
+          "result": {
+            "assets": {
+              "backend": "venice",
+              "endpoint": "https://api.venice.ai/api/v1/images/generations",
+              "model": "krea-v2-medium"
+            },
+            "error": null,
+            "job_id": "action_004_inpaint_rev_0003",
+            "metadata": {
+              "adapter_mode": "generation_endpoint_candidate_for_region",
+              "request": {
+                "model": "krea-v2-medium",
+                "prompt": "a mysterious fantasy city skyline inside a crystal ball, visible dark castle towers and glowing windows in atmospheric haze, distant rooftops seen through glass, dreamlike mist, soft cinematic light, painterly fantasy concept art, no text, no watermark",
+                "response_format": "b64_json",
+                "size": "1024x1024"
+              },
+              "response_keys": [
+                "created",
+                "data"
+              ]
+            },
+            "metrics": {
+              "height": 1024,
+              "latency_seconds": 26.774985351017676,
+              "width": 1024
+            },
+            "pixels": {
+              "dtype": "float32",
+              "max": 1.0,
+              "min": 0.03921568766236305,
+              "shape": [
+                1024,
+                1024,
+                4
+              ]
+            },
+            "status": "completed"
+          }
+        }
+      },
+      "output_assets": {
+        "backend": "venice",
+        "endpoint": "https://api.venice.ai/api/v1/images/generations",
+        "model": "krea-v2-medium"
+      },
+      "status": "executed"
+    },
+    {
+      "action_id": "action_005",
+      "after_revision": 5,
+      "before_revision": 4,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_glass_highlight"
+      ],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_006",
+      "after_revision": 6,
+      "before_revision": 5,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [
+        "mask_glass_highlight_soft"
+      ],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_007",
+      "after_revision": 7,
+      "before_revision": 6,
+      "changed_layer_ids": [
+        "layer_generated_city"
+      ],
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_008",
+      "after_revision": 8,
+      "before_revision": 7,
+      "changed_layer_ids": [
+        "layer_generated_city"
+      ],
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_009",
+      "after_revision": 9,
+      "before_revision": 8,
+      "changed_layer_ids": [
+        "layer_generated_city"
+      ],
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {},
+      "status": "executed"
+    },
+    {
+      "action_id": "action_010",
+      "after_revision": 9,
+      "before_revision": 9,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {},
+      "output_assets": {
+        "format": "png",
+        "path": "training/results/crystal_ball_city/final_image.png"
+      },
+      "status": "executed"
+    },
+    {
+      "action_id": "action_011",
+      "after_revision": 9,
+      "before_revision": 9,
+      "changed_layer_ids": [],
+      "created_layer_ids": [],
+      "created_mask_ids": [],
+      "document_id": "doc_crystal_ball_city",
+      "metadata": {
+        "layer_count": 2,
+        "mask_count": 5
+      },
+      "output_assets": {
+        "document_snapshot": "training/results/crystal_ball_city/layered_bundle/document_snapshot.json",
+        "format": "ai_edit_layered_bundle.v1",
+        "manifest": "training/results/crystal_ball_city/layered_bundle/manifest.json",
+        "path": "training/results/crystal_ball_city/layered_bundle"
+      },
+      "status": "executed"
+    }
+  ],
+  "diffusion_prompt": "a mysterious fantasy city skyline inside a crystal ball, visible dark castle towers and glowing windows in atmospheric haze, distant rooftops seen through glass, dreamlike mist, soft cinematic light, painterly fantasy concept art, no text, no watermark",
+  "events": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/events.jsonl",
+  "final_image": "training/results/crystal_ball_city/final_image.png",
+  "final_revision": 9,
+  "initial_image": "training/results/crystal_ball_city/initial_image.jpg",
+  "layered_bundle": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/layered_bundle",
+  "manifest": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/manifest.json",
+  "mask_stats": {
+    "mask_crystal_ball_interior": {
+      "area_pixels": 86744,
+      "bbox_xyxy": [
+        134,
+        44,
+        466,
+        376
+      ],
+      "soft_sum": 86744.0
+    },
+    "mask_crystal_ball_outer": {
+      "area_pixels": 106344,
+      "bbox_xyxy": [
+        116,
+        26,
+        484,
+        394
+      ],
+      "soft_sum": 106344.0
+    },
+    "mask_crystal_ball_write": {
+      "area_pixels": 103256,
+      "bbox_xyxy": [
+        122,
+        32,
+        478,
+        388
+      ],
+      "soft_sum": 86744.0
+    },
+    "mask_glass_highlight": {
+      "area_pixels": 12572,
+      "bbox_xyxy": [
+        145,
+        42,
+        305,
+        142
+      ],
+      "soft_sum": 12572.0
+    },
+    "mask_glass_highlight_soft": {
+      "area_pixels": 15836,
+      "bbox_xyxy": [
+        139,
+        36,
+        311,
+        148
+      ],
+      "soft_sum": 12572.0
+    }
+  },
+  "planner_output": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/planner_output.json",
+  "planner_request": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/planner_request.json",
+  "source_image": "tests/crystal_ball.jpg",
+  "success": true,
+  "trace_dir": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/trace/session_2026_05_27_212716_ce626e5b",
+  "training_example": "/home/algebraity/Programming/ai-image-editing/training/results/crystal_ball_city/training_example.json",
+  "user_prompt": "create a hazy image of a mysterious fantasy city inside of the crystal ball"
+}

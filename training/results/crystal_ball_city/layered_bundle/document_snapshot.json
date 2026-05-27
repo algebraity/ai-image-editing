@@ -1,0 +1,233 @@
+{
+  "active_layer_id": "layer_generated_city",
+  "active_selection_mask_id": null,
+  "annotations": {},
+  "canvas": {
+    "background_color_rgba": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "color_space": "srgb",
+    "dpi": null,
+    "height": 600,
+    "width": 600
+  },
+  "id": "doc_crystal_ball_city",
+  "layer_count": 2,
+  "layers": [
+    {
+      "blend_mode": "normal",
+      "child_layer_ids": [],
+      "has_pixels": true,
+      "height": 600,
+      "id": "layer_source",
+      "index": 0,
+      "kind": "raster",
+      "locks": {
+        "alpha_locked": false,
+        "fully_locked": false,
+        "pixels_locked": false,
+        "position_locked": false,
+        "visibility_locked": false
+      },
+      "mask_id": null,
+      "metadata": {},
+      "name": "source crystal ball",
+      "opacity": 1.0,
+      "parent_group_id": null,
+      "transform": {
+        "anchor_x": 0.5,
+        "anchor_y": 0.5,
+        "rotation_degrees": 0.0,
+        "scale_x": 1.0,
+        "scale_y": 1.0,
+        "x": 0.0,
+        "y": 0.0
+      },
+      "visible": true,
+      "width": 600
+    },
+    {
+      "blend_mode": "normal",
+      "child_layer_ids": [],
+      "has_pixels": true,
+      "height": 600,
+      "id": "layer_generated_city",
+      "index": 1,
+      "kind": "raster",
+      "locks": {
+        "alpha_locked": false,
+        "fully_locked": false,
+        "pixels_locked": false,
+        "position_locked": false,
+        "visibility_locked": false
+      },
+      "mask_id": null,
+      "metadata": {},
+      "name": "generated fantasy city",
+      "opacity": 0.94,
+      "parent_group_id": null,
+      "transform": {
+        "anchor_x": 0.5,
+        "anchor_y": 0.5,
+        "rotation_degrees": 0.0,
+        "scale_x": 1.0,
+        "scale_y": 1.0,
+        "x": 0.0,
+        "y": 0.0
+      },
+      "visible": true,
+      "width": 600
+    }
+  ],
+  "mask_count": 5,
+  "masks": [
+    {
+      "hard": true,
+      "height": 600,
+      "id": "mask_crystal_ball_outer",
+      "kind": "diffusion",
+      "metadata": {},
+      "name": "crystal ball outer ellipse",
+      "source": "action_001",
+      "stats": {
+        "area_pixels": 106344,
+        "bbox": [
+          116,
+          26,
+          368,
+          368
+        ],
+        "centroid": [
+          299.5,
+          209.5
+        ],
+        "is_binary": true,
+        "max_value": 1.0,
+        "min_value": 0.0
+      },
+      "width": 600
+    },
+    {
+      "hard": true,
+      "height": 600,
+      "id": "mask_crystal_ball_interior",
+      "kind": "diffusion",
+      "metadata": {},
+      "name": "safe crystal ball interior",
+      "source": "action_001",
+      "stats": {
+        "area_pixels": 86744,
+        "bbox": [
+          134,
+          44,
+          332,
+          332
+        ],
+        "centroid": [
+          299.5,
+          209.5
+        ],
+        "is_binary": true,
+        "max_value": 1.0,
+        "min_value": 0.0
+      },
+      "width": 600
+    },
+    {
+      "hard": false,
+      "height": 600,
+      "id": "mask_crystal_ball_write",
+      "kind": "diffusion",
+      "metadata": {},
+      "name": "soft crystal ball write mask",
+      "source": "action_001",
+      "stats": {
+        "area_pixels": 103256,
+        "bbox": [
+          122,
+          32,
+          356,
+          356
+        ],
+        "centroid": [
+          299.5,
+          209.5
+        ],
+        "is_binary": false,
+        "max_value": 1.0,
+        "min_value": 0.0
+      },
+      "width": 600
+    },
+    {
+      "hard": true,
+      "height": 600,
+      "id": "mask_glass_highlight",
+      "kind": "write_guard",
+      "metadata": {},
+      "name": "upper left glass highlight",
+      "source": "action_005",
+      "stats": {
+        "area_pixels": 12572,
+        "bbox": [
+          145,
+          42,
+          160,
+          100
+        ],
+        "centroid": [
+          224.5,
+          91.5
+        ],
+        "is_binary": true,
+        "max_value": 1.0,
+        "min_value": 0.0
+      },
+      "width": 600
+    },
+    {
+      "hard": false,
+      "height": 600,
+      "id": "mask_glass_highlight_soft",
+      "kind": "write_guard",
+      "metadata": {},
+      "name": "soft glass highlight",
+      "source": "action_005",
+      "stats": {
+        "area_pixels": 15836,
+        "bbox": [
+          139,
+          36,
+          172,
+          112
+        ],
+        "centroid": [
+          224.5,
+          91.5
+        ],
+        "is_binary": false,
+        "max_value": 1.0,
+        "min_value": 0.0
+      },
+      "width": 600
+    }
+  ],
+  "metadata": {
+    "author": null,
+    "created_at": null,
+    "custom": {},
+    "source_file": "tests/crystal_ball.jpg",
+    "tags": [
+      "crystal_ball",
+      "diffusion",
+      "venice",
+      "planner_demo"
+    ],
+    "title": "Crystal ball city demo",
+    "updated_at": null
+  },
+  "revision": 9
+}
