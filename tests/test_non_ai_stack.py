@@ -24,6 +24,7 @@ from ai_edit_kernel.trace.trace_logger import TraceLogger
 
 
 ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts"
+CUTE_ROOT = Path(__file__).resolve().parent / "cute"
 
 
 class NonAIStackTests(unittest.TestCase):
@@ -420,6 +421,571 @@ class NonAIStackTests(unittest.TestCase):
         self.assertLess(background_mask.stats().area_pixels, 80000)
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
 
+    def test_12_layer_management_and_merge_down(self) -> None:
+        """Exercise trivial layer metadata actions and GIMP-style merge down."""
+        case_name = "test_12_layer_management_and_merge_down"
+        actions = [
+            create_layer("action_001", "layer_background", "background", color="#0000ff"),
+            create_layer("action_002", "layer_foreground", "foreground", color="#ff0000", opacity=0.5),
+            rename_layer("action_003", "layer_foreground", "renamed foreground"),
+            duplicate_layer("action_004", "layer_foreground", "layer_duplicate", name="temporary duplicate"),
+            set_layer_opacity("action_005", "layer_duplicate", 1.0),
+            set_layer_visibility("action_006", "layer_duplicate", False),
+            reorder_layer("action_007", "layer_duplicate", 1),
+            set_blend_mode("action_008", "layer_foreground", "normal"),
+            delete_layer("action_009", "layer_duplicate"),
+            merge_layers("action_010", mode="down", layer_id="layer_foreground", output_layer_name="merged result"),
+            export_flat("action_011", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 16, 16, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_background"])
+        self.assertEqual(doc.layers[0].name, "merged result")
+        self.assertEqual(doc.layers[0].opacity, 1.0)
+        self.assert_color_close(doc.flatten_preview()[8, 8], [0.5, 0.0, 0.5, 1.0], tolerance=0.02)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_13_selection_grow_shrink_and_invert(self) -> None:
+        """Create, grow, shrink, and invert an elliptical selection."""
+        case_name = "test_13_selection_grow_shrink_and_invert"
+        actions = [
+            select_ellipse("action_001", "mask_ellipse", [4, 4, 12, 12], name="ellipse"),
+            grow_mask("action_002", "mask_grown", "mask_ellipse", pixels=2),
+            shrink_mask("action_003", "mask_shrunk", "mask_grown", pixels=1),
+            invert_mask("action_004", "mask_inverted", "mask_shrunk", set_active=True),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 16, 16, actions)
+
+        base_area = doc.get_mask("mask_ellipse").stats().area_pixels
+        grown_area = doc.get_mask("mask_grown").stats().area_pixels
+        shrunk_area = doc.get_mask("mask_shrunk").stats().area_pixels
+        inverted_area = doc.get_mask("mask_inverted").stats().area_pixels
+        self.assert_all_succeeded(results)
+        self.assertGreater(grown_area, base_area)
+        self.assertLess(shrunk_area, grown_area)
+        self.assertEqual(inverted_area, 16 * 16 - shrunk_area)
+        self.assertEqual(doc.active_selection_mask_id, "mask_inverted")
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_14_resize_canvas_center_and_document_crop(self) -> None:
+        """Resize around the center, then crop the whole document back down."""
+        case_name = "test_14_resize_canvas_center_and_document_crop"
+        actions = [
+            create_layer("action_001", "layer_square", "square", color="#00000000"),
+            full_canvas_mask("action_002", "mask_full_canvas", 4, 4),
+            draw_shape(
+                "action_003",
+                "layer_square",
+                rectangle([1, 1, 3, 3]),
+                write_mask_id="mask_full_canvas",
+                fill={"color": "#ff0000"},
+            ),
+            select_rect("action_004", "mask_square", [1, 1, 3, 3], name="square mask"),
+            resize_canvas("action_005", 8, 6),
+            export_flat("action_006", self.export_path(case_name, "stage_01_resized.png")),
+            crop("action_007", [2, 1, 6, 5], scope="document"),
+            export_flat("action_008", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 4, 4, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual((doc.canvas.width, doc.canvas.height), (4, 4))
+        self.assertEqual(doc.get_mask("mask_square").data.shape, (4, 4))
+        self.assert_color_close(doc.flatten_preview()[1, 1], [1.0, 0.0, 0.0, 1.0])
+        self.assert_color_close(doc.flatten_preview()[0, 0], [0.0, 0.0, 0.0, 0.0])
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_15_targeted_layer_and_mask_crop(self) -> None:
+        """Crop one layer and one mask while preserving the document canvas."""
+        case_name = "test_15_targeted_layer_and_mask_crop"
+        actions = [
+            create_layer("action_001", "layer_panel", "panel", color="#ffff00"),
+            full_canvas_mask("action_002", "mask_full_canvas", 8, 8),
+            crop("action_003", [2, 2, 6, 6], scope="layer", layer_id="layer_panel"),
+            crop("action_004", [1, 1, 7, 7], scope="mask", mask_id="mask_full_canvas"),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 8, 8, actions)
+
+        layer = doc.get_layer("layer_panel")
+        mask = doc.get_mask("mask_full_canvas")
+        self.assert_all_succeeded(results)
+        self.assertEqual((doc.canvas.width, doc.canvas.height), (8, 8))
+        self.assert_color_close(layer.pixels[0, 0], [0.0, 0.0, 0.0, 0.0])
+        self.assert_color_close(layer.pixels[3, 3], [1.0, 1.0, 0.0, 1.0])
+        self.assertEqual(float(mask.data[0, 0]), 0.0)
+        self.assertEqual(float(mask.data[3, 3]), 1.0)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_16_blur_region_rgb_and_alpha_channels(self) -> None:
+        """Blur RGB separately from alpha through explicit write masks."""
+        case_name = "test_16_blur_region_rgb_and_alpha_channels"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 9, 9),
+            create_layer("action_002", "layer_rgb", "rgb blur", color="#000000"),
+            draw_shape(
+                "action_003",
+                "layer_rgb",
+                rectangle([4, 0, 5, 9]),
+                write_mask_id="mask_full_canvas",
+                fill={"color": "#ffffff"},
+            ),
+            blur_region("action_004", "layer_rgb", "mask_full_canvas", radius=1.0, channels="rgb"),
+            create_layer("action_005", "layer_alpha", "alpha blur", color="#00000000"),
+            draw_shape(
+                "action_006",
+                "layer_alpha",
+                rectangle([4, 0, 5, 9]),
+                write_mask_id="mask_full_canvas",
+                fill={"color": "#ffffff"},
+            ),
+            blur_region("action_007", "layer_alpha", "mask_full_canvas", radius=1.0, channels="alpha"),
+            export_flat("action_008", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 9, 9, actions)
+
+        rgb_layer = doc.get_layer("layer_rgb").pixels
+        alpha_layer = doc.get_layer("layer_alpha").pixels
+        self.assert_all_succeeded(results)
+        self.assertGreater(float(rgb_layer[4, 3, 0]), 0.0)
+        self.assertEqual(float(rgb_layer[4, 3, 3]), 1.0)
+        self.assertGreater(float(alpha_layer[4, 3, 3]), 0.0)
+        self.assertEqual(float(alpha_layer[4, 3, 0]), 0.0)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_17_merge_visible_and_flatten(self) -> None:
+        """Merge visible layers while preserving hidden layers, then flatten."""
+        case_name = "test_17_merge_visible_and_flatten"
+        actions = [
+            create_layer("action_001", "layer_background", "background", color="#00ff00"),
+            create_layer("action_002", "layer_top", "top", color="#ff0000", opacity=0.5),
+            create_layer("action_003", "layer_hidden", "hidden", color="#0000ff"),
+            set_layer_visibility("action_004", "layer_hidden", False),
+            merge_layers("action_005", mode="visible", output_layer_id="layer_merged", output_layer_name="merged visible"),
+            export_flat("action_006", self.export_path(case_name, "stage_01_merged_visible.png")),
+            merge_layers("action_007", mode="flatten", output_layer_id="layer_flat", output_layer_name="flat"),
+            export_flat("action_008", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 8, 8, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_flat"])
+        self.assert_color_close(doc.flatten_preview()[4, 4], [0.5, 0.5, 0.0, 1.0], tolerance=0.02)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_18_resize_canvas_with_cute1(self) -> None:
+        """Resize a document containing a real imported image around the center."""
+        case_name = "test_18_resize_canvas_with_cute1"
+        fixture = cute_fixture(1)
+        resized_width = fixture["canvas_width"] + 32
+        resized_height = fixture["canvas_height"] + 16
+        actions = [
+            import_image_as_layer("action_001", "layer_cute1", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute1"),
+            resize_canvas("action_002", resized_width, resized_height),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual((doc.canvas.width, doc.canvas.height), (resized_width, resized_height))
+        self.assertEqual(doc.get_layer("layer_cute1").pixels.shape, (resized_height, resized_width, 4))
+        self.assertGreater(float(doc.get_layer("layer_cute1").pixels[resized_height // 2, resized_width // 2, 3]), 0.9)
+        self.assert_color_close(doc.get_layer("layer_cute1").pixels[0, 0], [0.0, 0.0, 0.0, 0.0])
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_19_crop_document_with_cute2(self) -> None:
+        """Crop the whole document down to an imported cute image region."""
+        case_name = "test_19_crop_document_with_cute2"
+        fixture = cute_fixture(2)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute2", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute2"),
+            crop("action_002", fixture["image_bbox"], scope="document"),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual((doc.canvas.width, doc.canvas.height), (fixture["image_width"], fixture["image_height"]))
+        self.assertEqual(doc.get_layer("layer_cute2").pixels.shape, (fixture["image_height"], fixture["image_width"], 4))
+        self.assertGreater(float(doc.get_layer("layer_cute2").pixels[fixture["image_height"] // 2, fixture["image_width"] // 2, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_20_crop_layer_with_cute3(self) -> None:
+        """Clear pixels outside a layer crop without changing the canvas size."""
+        case_name = "test_20_crop_layer_with_cute3"
+        fixture = cute_fixture(3)
+        crop_bbox = cute_relative_bbox(3, 0.25, 0.25, 0.75, 0.75)
+        outside_x, outside_y = cute_relative_point(3, 0.1, 0.1)
+        center_x, center_y = fixture["center"]
+        actions = [
+            import_image_as_layer("action_001", "layer_cute3", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute3"),
+            crop("action_002", crop_bbox, scope="layer", layer_id="layer_cute3"),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        layer = doc.get_layer("layer_cute3")
+        self.assert_all_succeeded(results)
+        self.assertEqual((doc.canvas.width, doc.canvas.height), (fixture["canvas_width"], fixture["canvas_height"]))
+        self.assert_color_close(layer.pixels[outside_y, outside_x], [0.0, 0.0, 0.0, 0.0])
+        self.assertGreater(float(layer.pixels[center_y, center_x, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_21_crop_mask_with_cute4(self) -> None:
+        """Crop a write mask and use it to constrain painting on an imported image."""
+        case_name = "test_21_crop_mask_with_cute4"
+        fixture = cute_fixture(4)
+        crop_bbox = cute_relative_bbox(4, 0.25, 0.25, 0.75, 0.75)
+        outside_x, outside_y = cute_relative_point(4, 0.1, 0.1)
+        center_x, center_y = fixture["center"]
+        actions = [
+            import_image_as_layer("action_001", "layer_cute4", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute4"),
+            full_canvas_mask("action_002", "mask_cropped_write", fixture["canvas_width"], fixture["canvas_height"]),
+            crop("action_003", crop_bbox, scope="mask", mask_id="mask_cropped_write"),
+            paint_bucket_fill("action_004", "layer_cute4", "mask_cropped_write", "#ff00ff"),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        mask = doc.get_mask("mask_cropped_write")
+        self.assert_all_succeeded(results)
+        self.assertEqual(float(mask.data[outside_y, outside_x]), 0.0)
+        self.assertEqual(float(mask.data[center_y, center_x]), 1.0)
+        self.assert_color_close(doc.get_layer("layer_cute4").pixels[center_y, center_x, :3], [1.0, 0.0, 1.0], tolerance=0.01)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_22_delete_layer_with_cute5(self) -> None:
+        """Delete an imported image layer from a document stack."""
+        case_name = "test_22_delete_layer_with_cute5"
+        fixture = cute_fixture(5)
+        center_x, center_y = fixture["center"]
+        actions = [
+            create_layer("action_001", "layer_background", "background", color="#112233"),
+            import_image_as_layer("action_002", "layer_cute5", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute5"),
+            delete_layer("action_003", "layer_cute5"),
+            export_flat("action_004", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_background"])
+        self.assert_color_close(doc.flatten_preview()[center_y, center_x], [0x11 / 255.0, 0x22 / 255.0, 0x33 / 255.0, 1.0])
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_23_duplicate_layer_with_cute1(self) -> None:
+        """Duplicate an imported layer as an independent deep copy."""
+        case_name = "test_23_duplicate_layer_with_cute1"
+        fixture = cute_fixture(1)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute1", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute1"),
+            duplicate_layer("action_002", "layer_cute1", "layer_cute1_copy", name="cute1 copy"),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        source = doc.get_layer("layer_cute1")
+        duplicate = doc.get_layer("layer_cute1_copy")
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_cute1", "layer_cute1_copy"])
+        np.testing.assert_allclose(source.pixels, duplicate.pixels)
+        self.assertFalse(np.shares_memory(source.pixels, duplicate.pixels))
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_24_rename_layer_with_cute2(self) -> None:
+        """Rename an imported layer while keeping its stable ID."""
+        case_name = "test_24_rename_layer_with_cute2"
+        fixture = cute_fixture(2)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute2", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute2"),
+            rename_layer("action_002", "layer_cute2", "renamed cute2"),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual(doc.get_layer("layer_cute2").name, "renamed cute2")
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_cute2"])
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_25_reorder_layer_with_cute3(self) -> None:
+        """Move an imported layer below an opaque layer and verify stack order."""
+        case_name = "test_25_reorder_layer_with_cute3"
+        fixture = cute_fixture(3)
+        center_x, center_y = fixture["center"]
+        actions = [
+            create_layer("action_001", "layer_cover", "cover", color="#000000"),
+            import_image_as_layer("action_002", "layer_cute3", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute3"),
+            reorder_layer("action_003", "layer_cute3", 0),
+            export_flat("action_004", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_cute3", "layer_cover"])
+        self.assert_color_close(doc.flatten_preview()[center_y, center_x], [0.0, 0.0, 0.0, 1.0])
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_26_set_layer_visibility_with_cute4(self) -> None:
+        """Hide an imported layer and verify it no longer contributes to preview."""
+        case_name = "test_26_set_layer_visibility_with_cute4"
+        fixture = cute_fixture(4)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute4", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute4"),
+            set_layer_visibility("action_002", "layer_cute4", False),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertFalse(doc.get_layer("layer_cute4").visible)
+        self.assertEqual(int(np.count_nonzero(doc.flatten_preview()[..., 3] > 0.0)), 0)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_27_set_layer_opacity_with_cute5(self) -> None:
+        """Set opacity on an imported image layer and verify source-over output."""
+        case_name = "test_27_set_layer_opacity_with_cute5"
+        fixture = cute_fixture(5)
+        center_x, center_y = fixture["center"]
+        actions = [
+            create_layer("action_001", "layer_background", "background", color="#0000ff"),
+            import_image_as_layer("action_002", "layer_cute5", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute5"),
+            set_layer_opacity("action_003", "layer_cute5", 0.25),
+            export_flat("action_004", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        layer = doc.get_layer("layer_cute5")
+        source_rgb = layer.pixels[center_y, center_x, :3]
+        expected = np.array([source_rgb[0] * 0.25, source_rgb[1] * 0.25, source_rgb[2] * 0.25 + 0.75, 1.0], dtype=np.float32)
+        self.assert_all_succeeded(results)
+        self.assertEqual(layer.opacity, 0.25)
+        self.assert_color_close(doc.flatten_preview()[center_y, center_x], expected.tolist(), tolerance=0.02)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_28_set_blend_mode_with_cute1(self) -> None:
+        """Apply a supported blend-mode metadata update to an imported layer."""
+        case_name = "test_28_set_blend_mode_with_cute1"
+        fixture = cute_fixture(1)
+        center_x, center_y = fixture["center"]
+        actions = [
+            import_image_as_layer("action_001", "layer_cute1", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute1"),
+            set_blend_mode("action_002", "layer_cute1", "normal"),
+            export_flat("action_003", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual(doc.get_layer("layer_cute1").blend_mode.value, "normal")
+        self.assertGreater(float(doc.flatten_preview()[center_y, center_x, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_29_merge_down_with_cute2(self) -> None:
+        """Merge an imported image layer down into an opaque background."""
+        case_name = "test_29_merge_down_with_cute2"
+        fixture = cute_fixture(2)
+        center_x, center_y = fixture["center"]
+        actions = [
+            create_layer("action_001", "layer_background", "background", color="#224466"),
+            import_image_as_layer("action_002", "layer_cute2", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute2", opacity=0.5),
+            merge_layers("action_003", mode="down", layer_id="layer_cute2", output_layer_name="cute2 merged down"),
+            export_flat("action_004", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_background"])
+        self.assertEqual(doc.layers[0].name, "cute2 merged down")
+        self.assertGreater(float(doc.flatten_preview()[center_y, center_x, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_30_merge_visible_with_cute3(self) -> None:
+        """Merge visible imported image layers while preserving a hidden layer."""
+        case_name = "test_30_merge_visible_with_cute3"
+        fixture = cute_fixture(3)
+        center_x, center_y = fixture["center"]
+        actions = [
+            import_image_as_layer("action_001", "layer_cute3_a", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute3 a"),
+            import_image_as_layer("action_002", "layer_cute3_hidden", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute3 hidden"),
+            set_layer_visibility("action_003", "layer_cute3_hidden", False),
+            create_layer("action_004", "layer_overlay", "overlay", color="#ff000080", opacity=0.5),
+            merge_layers("action_005", mode="visible", output_layer_id="layer_merged_visible", output_layer_name="merged visible cute3"),
+            export_flat("action_006", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_merged_visible", "layer_cute3_hidden"])
+        self.assertFalse(doc.get_layer("layer_cute3_hidden").visible)
+        self.assertGreater(float(doc.get_layer("layer_merged_visible").pixels[center_y, center_x, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_31_merge_selected_with_cute4(self) -> None:
+        """Merge explicitly selected imported layers in stack order."""
+        case_name = "test_31_merge_selected_with_cute4"
+        fixture = cute_fixture(4)
+        center_x, center_y = fixture["center"]
+        actions = [
+            import_image_as_layer("action_001", "layer_cute4_a", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute4 a"),
+            import_image_as_layer("action_002", "layer_cute4_b", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute4 b", opacity=0.5),
+            create_layer("action_003", "layer_unselected", "unselected", color="#00000000"),
+            merge_layers(
+                "action_004",
+                mode="selected",
+                output_layer_id="layer_selected_merge",
+                output_layer_name="selected merge cute4",
+                layer_ids=["layer_cute4_a", "layer_cute4_b"],
+            ),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_selected_merge", "layer_unselected"])
+        self.assertGreater(float(doc.get_layer("layer_selected_merge").pixels[center_y, center_x, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_32_flatten_with_cute5(self) -> None:
+        """Flatten visible imported layers and discard hidden layers."""
+        case_name = "test_32_flatten_with_cute5"
+        fixture = cute_fixture(5)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute5", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute5"),
+            import_image_as_layer("action_002", "layer_hidden", fixture["path"], x=fixture["x"], y=fixture["y"], name="hidden cute5"),
+            set_layer_visibility("action_003", "layer_hidden", False),
+            merge_layers("action_004", mode="flatten", output_layer_id="layer_flat", output_layer_name="flat cute5"),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual([layer.id for layer in doc.layers], ["layer_flat"])
+        self.assertTrue(bool(np.all(doc.get_layer("layer_flat").pixels[..., 3] == 1.0)))
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_33_select_ellipse_with_cute1(self) -> None:
+        """Use an elliptical selection as a paint mask on an imported image."""
+        case_name = "test_33_select_ellipse_with_cute1"
+        fixture = cute_fixture(1)
+        center_x, center_y = fixture["center"]
+        mask_bbox = cute_relative_bbox(1, 0.25, 0.2, 0.75, 0.8)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute1", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute1"),
+            select_ellipse("action_002", "mask_ellipse", mask_bbox, name="ellipse paint region"),
+            paint_bucket_fill("action_003", "layer_cute1", "mask_ellipse", "#00ffff"),
+            export_flat("action_004", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertGreater(doc.get_mask("mask_ellipse").stats().area_pixels, 200000)
+        self.assert_color_close(doc.get_layer("layer_cute1").pixels[center_y, center_x, :3], [0.0, 1.0, 1.0], tolerance=0.01)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_34_grow_mask_with_cute2(self) -> None:
+        """Grow a rectangular selection and paint the expanded area."""
+        case_name = "test_34_grow_mask_with_cute2"
+        fixture = cute_fixture(2)
+        mask_bbox = cute_relative_bbox(2, 0.4, 0.4, 0.6, 0.6)
+        paint_x = (mask_bbox[0] + mask_bbox[2]) // 2
+        paint_y = mask_bbox[1] - 6
+        actions = [
+            import_image_as_layer("action_001", "layer_cute2", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute2"),
+            select_rect("action_002", "mask_rect", mask_bbox, name="base rect"),
+            grow_mask("action_003", "mask_grown", "mask_rect", pixels=12),
+            paint_bucket_fill("action_004", "layer_cute2", "mask_grown", "#ffff00"),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertGreater(doc.get_mask("mask_grown").stats().area_pixels, doc.get_mask("mask_rect").stats().area_pixels)
+        self.assert_color_close(doc.get_layer("layer_cute2").pixels[paint_y, paint_x, :3], [1.0, 1.0, 0.0], tolerance=0.01)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_35_shrink_mask_with_cute3(self) -> None:
+        """Shrink a selection before painting an imported image."""
+        case_name = "test_35_shrink_mask_with_cute3"
+        fixture = cute_fixture(3)
+        center_x, center_y = fixture["center"]
+        mask_bbox = cute_relative_bbox(3, 0.3, 0.3, 0.7, 0.7)
+        edge_x = (mask_bbox[0] + mask_bbox[2]) // 2
+        edge_y = mask_bbox[1] + 4
+        actions = [
+            import_image_as_layer("action_001", "layer_cute3", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute3"),
+            select_rect("action_002", "mask_rect", mask_bbox, name="base rect"),
+            shrink_mask("action_003", "mask_shrunk", "mask_rect", pixels=12),
+            paint_bucket_fill("action_004", "layer_cute3", "mask_shrunk", "#ff8800"),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertLess(doc.get_mask("mask_shrunk").stats().area_pixels, doc.get_mask("mask_rect").stats().area_pixels)
+        self.assertEqual(float(doc.get_mask("mask_shrunk").data[edge_y, edge_x]), 0.0)
+        self.assert_color_close(doc.get_layer("layer_cute3").pixels[center_y, center_x, :3], [1.0, 0x88 / 255.0, 0.0], tolerance=0.01)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_36_invert_mask_with_cute4(self) -> None:
+        """Invert a central selection and clear everything outside it."""
+        case_name = "test_36_invert_mask_with_cute4"
+        fixture = cute_fixture(4)
+        center_x, center_y = fixture["center"]
+        mask_bbox = cute_relative_bbox(4, 0.25, 0.25, 0.75, 0.75)
+        outside_x, outside_y = cute_relative_point(4, 0.1, 0.1)
+        actions = [
+            import_image_as_layer("action_001", "layer_cute4", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute4"),
+            select_rect("action_002", "mask_center", mask_bbox, name="center"),
+            invert_mask("action_003", "mask_outside", "mask_center", set_active=True),
+            clear_region("action_004", "layer_cute4", "mask_outside"),
+            export_flat("action_005", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual(doc.active_selection_mask_id, "mask_outside")
+        self.assertGreater(float(doc.get_layer("layer_cute4").pixels[center_y, center_x, 3]), 0.9)
+        self.assertEqual(float(doc.get_layer("layer_cute4").pixels[outside_y, outside_x, 3]), 0.0)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_37_blur_region_with_cute5(self) -> None:
+        """Blur RGB channels inside a write mask on an imported image layer."""
+        case_name = "test_37_blur_region_with_cute5"
+        fixture = cute_fixture(5)
+        center_x, center_y = fixture["center"]
+        blur_bbox = cute_relative_bbox(5, 0.45, 0.25, 0.55, 0.75)
+        black_bbox = cute_relative_bbox(5, 0.47, 0.25, 0.53, 0.75)
+        strip_bbox = [center_x - 2, blur_bbox[1], center_x + 2, blur_bbox[3]]
+        actions = [
+            import_image_as_layer("action_001", "layer_cute5", fixture["path"], x=fixture["x"], y=fixture["y"], name="cute5"),
+            full_canvas_mask("action_002", "mask_full_canvas", fixture["canvas_width"], fixture["canvas_height"]),
+            draw_shape(
+                "action_003",
+                "layer_cute5",
+                rectangle(black_bbox),
+                write_mask_id="mask_full_canvas",
+                fill={"color": "#000000"},
+            ),
+            draw_shape(
+                "action_004",
+                "layer_cute5",
+                rectangle(strip_bbox),
+                write_mask_id="mask_full_canvas",
+                fill={"color": "#ffffff"},
+            ),
+            select_rect("action_005", "mask_blur_strip", blur_bbox, name="blur strip"),
+            blur_region("action_006", "layer_cute5", "mask_blur_strip", radius=2.0, channels="rgb"),
+            export_flat("action_007", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, fixture["canvas_width"], fixture["canvas_height"], actions)
+
+        layer = doc.get_layer("layer_cute5")
+        self.assert_all_succeeded(results)
+        self.assertGreater(float(layer.pixels[center_y, center_x - 5, 0]), 0.1)
+        self.assertGreater(float(layer.pixels[center_y, center_x - 5, 3]), 0.9)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
     def run_case(
         self,
         name: str,
@@ -564,6 +1130,60 @@ class NonAIStackTests(unittest.TestCase):
         np.testing.assert_allclose(np.asarray(actual, dtype=np.float32), np.asarray(expected, dtype=np.float32), atol=tolerance)
 
 
+def cute_fixture_path(index: int) -> Path:
+    """Return the full-resolution cute fixture path."""
+    path = CUTE_ROOT / f"cute{index}.jpg"
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
+
+
+def cute_image_size(index: int) -> tuple[int, int]:
+    """Return the native width and height for a cute fixture."""
+    with Image.open(cute_fixture_path(index)) as image:
+        return image.size
+
+
+def cute_fixture(index: int, padding: int = 16) -> dict[str, Any]:
+    """Return native-size import geometry for a cute fixture on a padded canvas."""
+    image_width, image_height = cute_image_size(index)
+    return {
+        "path": cute_fixture_path(index),
+        "x": padding,
+        "y": padding,
+        "image_width": image_width,
+        "image_height": image_height,
+        "canvas_width": image_width + padding * 2,
+        "canvas_height": image_height + padding * 2,
+        "image_bbox": [padding, padding, padding + image_width, padding + image_height],
+        "center": (padding + image_width // 2, padding + image_height // 2),
+    }
+
+
+def cute_relative_bbox(
+    index: int,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    padding: int = 16,
+) -> list[int]:
+    """Return a bbox inside a native-size cute fixture using relative coordinates."""
+    image_width, image_height = cute_image_size(index)
+    return [
+        padding + int(round(image_width * x0)),
+        padding + int(round(image_height * y0)),
+        padding + int(round(image_width * x1)),
+        padding + int(round(image_height * y1)),
+    ]
+
+
+def cute_relative_point(index: int, x: float, y: float, padding: int = 16) -> tuple[int, int]:
+    """Return one point inside a native-size cute fixture using relative coordinates."""
+    image_width, image_height = cute_image_size(index)
+    return padding + int(round(image_width * x)), padding + int(round(image_height * y))
+
+
 def create_layer(
     action_id: str,
     layer_id: str,
@@ -614,8 +1234,119 @@ def import_image_as_layer(
     )
 
 
+def resize_canvas(action_id: str, width: int, height: int) -> dict[str, Any]:
+    return action(action_id, "resize_canvas", params={"width": width, "height": height, "anchor": "center"})
+
+
+def crop(
+    action_id: str,
+    bbox_xyxy: list[int],
+    *,
+    scope: str,
+    layer_id: str | None = None,
+    mask_id: str | None = None,
+) -> dict[str, Any]:
+    target: dict[str, Any] = {}
+    if layer_id is not None:
+        target["layer_id"] = layer_id
+    if mask_id is not None:
+        target["mask_id"] = mask_id
+    return action(action_id, "crop", params={"bbox_xyxy": bbox_xyxy, "scope": scope}, target=target)
+
+
 def set_active_layer(action_id: str, layer_id: str) -> dict[str, Any]:
     return action(action_id, "set_active_layer", target={"layer_id": layer_id})
+
+
+def delete_layer(action_id: str, layer_id: str) -> dict[str, Any]:
+    return action(
+        action_id,
+        "delete_layer",
+        target={"layer_id": layer_id},
+        preconditions={"required_layer_ids": [layer_id], "allow_hidden_layers": True},
+    )
+
+
+def duplicate_layer(action_id: str, source_layer_id: str, output_layer_id: str, *, name: str) -> dict[str, Any]:
+    return action(
+        action_id,
+        "duplicate_layer",
+        params={"name": name, "set_active": True},
+        target={"layer_id": source_layer_id, "output_layer_id": output_layer_id},
+        preconditions={"required_layer_ids": [source_layer_id]},
+    )
+
+
+def rename_layer(action_id: str, layer_id: str, name: str) -> dict[str, Any]:
+    return action(
+        action_id,
+        "rename_layer",
+        params={"name": name},
+        target={"layer_id": layer_id},
+        preconditions={"required_layer_ids": [layer_id]},
+    )
+
+
+def reorder_layer(action_id: str, layer_id: str, index: int) -> dict[str, Any]:
+    return action(
+        action_id,
+        "reorder_layer",
+        params={"index": index},
+        target={"layer_id": layer_id},
+        preconditions={"required_layer_ids": [layer_id], "allow_hidden_layers": True},
+    )
+
+
+def set_layer_visibility(action_id: str, layer_id: str, visible: bool) -> dict[str, Any]:
+    return action(
+        action_id,
+        "set_layer_visibility",
+        params={"visible": visible},
+        target={"layer_id": layer_id},
+        preconditions={"required_layer_ids": [layer_id], "allow_hidden_layers": True},
+    )
+
+
+def set_layer_opacity(action_id: str, layer_id: str, opacity: float) -> dict[str, Any]:
+    return action(
+        action_id,
+        "set_layer_opacity",
+        params={"opacity": opacity},
+        target={"layer_id": layer_id},
+        preconditions={"required_layer_ids": [layer_id], "allow_hidden_layers": True},
+    )
+
+
+def set_blend_mode(action_id: str, layer_id: str, blend_mode: str) -> dict[str, Any]:
+    return action(
+        action_id,
+        "set_blend_mode",
+        params={"blend_mode": blend_mode},
+        target={"layer_id": layer_id},
+        preconditions={"required_layer_ids": [layer_id], "allow_hidden_layers": True},
+    )
+
+
+def merge_layers(
+    action_id: str,
+    *,
+    mode: str,
+    layer_id: str | None = None,
+    output_layer_id: str | None = None,
+    output_layer_name: str | None = None,
+    layer_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"mode": mode}
+    if output_layer_name is not None:
+        params["output_layer_name"] = output_layer_name
+    if layer_ids is not None:
+        params["layer_ids"] = layer_ids
+    target: dict[str, Any] = {}
+    if layer_id is not None:
+        target["layer_id"] = layer_id
+    if output_layer_id is not None:
+        target["output_layer_id"] = output_layer_id
+    return action(action_id, "merge_layers", params=params, target=target)
 
 
 def full_canvas_mask(action_id: str, mask_id: str, width: int, height: int) -> dict[str, Any]:
@@ -632,6 +1363,15 @@ def select_rect(action_id: str, mask_id: str, bbox_xyxy: list[int], *, name: str
     return action(
         action_id,
         "select_rect",
+        params={"name": name, "bbox_xyxy": bbox_xyxy, "set_active": True},
+        target={"mask_id": mask_id},
+    )
+
+
+def select_ellipse(action_id: str, mask_id: str, bbox_xyxy: list[int], *, name: str) -> dict[str, Any]:
+    return action(
+        action_id,
+        "select_ellipse",
         params={"name": name, "bbox_xyxy": bbox_xyxy, "set_active": True},
         target={"mask_id": mask_id},
     )
@@ -724,6 +1464,36 @@ def feather_mask(action_id: str, output_mask_id: str, source_mask_id: str, *, ra
     )
 
 
+def grow_mask(action_id: str, output_mask_id: str, source_mask_id: str, *, pixels: int) -> dict[str, Any]:
+    return action(
+        action_id,
+        "grow_mask",
+        params={"source_mask_id": source_mask_id, "pixels": pixels, "name": output_mask_id, "set_active": False},
+        target={"mask_id": output_mask_id},
+        preconditions={"required_mask_ids": [source_mask_id]},
+    )
+
+
+def shrink_mask(action_id: str, output_mask_id: str, source_mask_id: str, *, pixels: int) -> dict[str, Any]:
+    return action(
+        action_id,
+        "shrink_mask",
+        params={"source_mask_id": source_mask_id, "pixels": pixels, "name": output_mask_id, "set_active": False},
+        target={"mask_id": output_mask_id},
+        preconditions={"required_mask_ids": [source_mask_id]},
+    )
+
+
+def invert_mask(action_id: str, output_mask_id: str, source_mask_id: str, *, set_active: bool = False) -> dict[str, Any]:
+    return action(
+        action_id,
+        "invert_mask",
+        params={"source_mask_id": source_mask_id, "name": output_mask_id, "set_active": set_active},
+        target={"mask_id": output_mask_id},
+        preconditions={"required_mask_ids": [source_mask_id]},
+    )
+
+
 def draw_shape(
     action_id: str,
     layer_id: str,
@@ -749,6 +1519,25 @@ def paint_bucket_fill(action_id: str, layer_id: str, write_mask_id: str, color: 
         action_id,
         "paint_bucket_fill",
         params={"color": color, "mode": "replace_rgb_preserve_alpha"},
+        target={"layer_id": layer_id},
+        write_mask_id=write_mask_id,
+        preconditions={"required_mask_ids": [write_mask_id], "required_layer_ids": [layer_id]},
+        expected_result={"changed_layer_ids": [layer_id]},
+    )
+
+
+def blur_region(
+    action_id: str,
+    layer_id: str,
+    write_mask_id: str,
+    *,
+    radius: float,
+    channels: str | list[str],
+) -> dict[str, Any]:
+    return action(
+        action_id,
+        "blur_region",
+        params={"radius": radius, "channels": channels, "edge_mode": "nearest"},
         target={"layer_id": layer_id},
         write_mask_id=write_mask_id,
         preconditions={"required_mask_ids": [write_mask_id], "required_layer_ids": [layer_id]},

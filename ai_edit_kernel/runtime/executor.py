@@ -14,7 +14,12 @@ from typing import Any, Optional, Protocol
 
 import numpy as np
 
-from ai_edit_kernel.document.document_state import DocumentState
+try:
+    from scipy import ndimage as _ndimage
+except ImportError:  # pragma: no cover - exercised only when SciPy is absent
+    _ndimage = None
+
+from ai_edit_kernel.document.document_state import CanvasSpec, DocumentState
 from ai_edit_kernel.document.layer import BlendMode, Layer, LayerKind
 from ai_edit_kernel.document.mask import Mask, MaskKind
 from ai_edit_kernel.runtime.validator import ValidationReport, Validator
@@ -167,17 +172,32 @@ class Executor:
     def dispatch(self, document: DocumentState, action: Action) -> ActionResult:
         """Route an action to its implementation method."""
         handlers = {
+            ActionType.RESIZE_CANVAS: self._execute_resize_canvas,
+            ActionType.CROP: self._execute_crop,
             ActionType.IMPORT_IMAGE_AS_LAYER: self._execute_import_image_as_layer,
             ActionType.CREATE_LAYER: self._execute_create_layer,
+            ActionType.DELETE_LAYER: self._execute_delete_layer,
+            ActionType.DUPLICATE_LAYER: self._execute_duplicate_layer,
+            ActionType.RENAME_LAYER: self._execute_rename_layer,
+            ActionType.REORDER_LAYER: self._execute_reorder_layer,
             ActionType.SET_ACTIVE_LAYER: self._execute_set_active_layer,
+            ActionType.SET_LAYER_VISIBILITY: self._execute_set_layer_visibility,
+            ActionType.SET_LAYER_OPACITY: self._execute_set_layer_opacity,
+            ActionType.SET_BLEND_MODE: self._execute_set_blend_mode,
+            ActionType.MERGE_LAYERS: self._execute_merge_layers,
             ActionType.SELECT_RECT: self._execute_select_rect,
+            ActionType.SELECT_ELLIPSE: self._execute_select_ellipse,
             ActionType.SELECT_COLOR_RANGE: self._execute_select_color_range,
             ActionType.MAGIC_WAND_SELECT: self._execute_magic_wand_select,
             ActionType.CREATE_MASK_FROM_SHAPE: self._execute_create_mask_from_shape,
+            ActionType.GROW_MASK: self._execute_grow_mask,
+            ActionType.SHRINK_MASK: self._execute_shrink_mask,
+            ActionType.INVERT_MASK: self._execute_invert_mask,
             ActionType.COMBINE_MASKS: self._execute_combine_masks,
             ActionType.FEATHER_MASK: self._execute_feather_mask,
             ActionType.DRAW_SHAPE: self._execute_draw_shape,
             ActionType.PAINT_BUCKET_FILL: self._execute_paint_bucket_fill,
+            ActionType.BLUR_REGION: self._execute_blur_region,
             ActionType.CLEAR_REGION: self._execute_clear_region,
             ActionType.EXPORT_FLAT: self._execute_export_flat,
             ActionType.NO_OP: self._execute_no_op,
@@ -226,6 +246,81 @@ class Executor:
         document.metadata = snapshot.metadata
         document.revision = snapshot.revision
         document.annotations = snapshot.annotations
+
+    def _execute_resize_canvas(self, document: DocumentState, action: Action) -> ActionResult:
+        """Resize the canvas around its center, padding or cropping all arrays."""
+        new_width = int(action.params["width"])
+        new_height = int(action.params["height"])
+        fill_color = _parse_color(action.params.get("fill_color", "#00000000"))
+        old_width = document.canvas.width
+        old_height = document.canvas.height
+
+        for layer in document.layers:
+            if layer.pixels is not None:
+                layer.pixels = _resize_rgba_centered(layer.pixels, new_width, new_height, fill_color)
+        for mask in document.masks.values():
+            mask.data = _resize_mask_centered(mask.data, new_width, new_height)
+
+        document.canvas = CanvasSpec(
+            width=new_width,
+            height=new_height,
+            color_space=document.canvas.color_space,
+            background_color_rgba=document.canvas.background_color_rgba,
+            dpi=document.canvas.dpi,
+        )
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            changed_layer_ids=[layer.id for layer in document.layers],
+            created_mask_ids=[],
+            metadata={"old_size": [old_width, old_height], "new_size": [new_width, new_height], "anchor": "center"},
+        )
+
+    def _execute_crop(self, document: DocumentState, action: Action) -> ActionResult:
+        """Crop the whole document or clear outside a crop on one layer or mask."""
+        scope = action.params.get("scope", "document")
+        x0, y0, x1, y1 = _bbox_to_ints(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
+        if scope == "document":
+            old_size = [document.canvas.width, document.canvas.height]
+            for layer in document.layers:
+                if layer.pixels is not None:
+                    layer.pixels = np.array(layer.pixels[y0:y1, x0:x1, :], dtype=np.float32, copy=True)
+            for mask in document.masks.values():
+                mask.data = np.array(mask.data[y0:y1, x0:x1], dtype=np.float32, copy=True)
+            document.canvas = CanvasSpec(
+                width=x1 - x0,
+                height=y1 - y0,
+                color_space=document.canvas.color_space,
+                background_color_rgba=document.canvas.background_color_rgba,
+                dpi=document.canvas.dpi,
+            )
+            return ActionResult(
+                action_id=action.id,
+                status=ActionStatus.EXECUTED,
+                changed_layer_ids=[layer.id for layer in document.layers],
+                created_mask_ids=[],
+                metadata={"scope": scope, "old_size": old_size, "new_size": [x1 - x0, y1 - y0]},
+            )
+
+        if scope == "layer":
+            layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+            if layer.pixels is None:
+                raise ValueError(f"target layer {layer.id!r} has no pixel data")
+            fill_color = _parse_color(action.params.get("fill_color", "#00000000"))
+            cropped = np.zeros_like(layer.pixels)
+            cropped[..., :] = fill_color
+            cropped[y0:y1, x0:x1, :] = layer.pixels[y0:y1, x0:x1, :]
+            layer.pixels = cropped
+            return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id], metadata={"scope": scope})
+
+        if scope == "mask":
+            mask = document.get_mask(_required_target(action.target.mask_id, "target.mask_id"))
+            cropped = np.zeros_like(mask.data)
+            cropped[y0:y1, x0:x1] = mask.data[y0:y1, x0:x1]
+            mask.data = cropped.astype(np.float32, copy=False)
+            return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[], metadata={"scope": scope, "changed_mask_id": mask.id})
+
+        raise ValueError(f"unsupported crop scope {scope!r}")
 
     def _execute_create_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a new full-canvas layer and insert it into the document."""
@@ -302,25 +397,69 @@ class Executor:
 
     def _execute_delete_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Remove a layer after lock and dependency checks."""
-        return self._unsupported(action, document, "delete_layer")
+        layer_id = _required_target(action.target.layer_id, "target.layer_id")
+        document.remove_layer(layer_id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer_id])
 
     def _execute_duplicate_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a deep copy of a layer and insert it into the stack."""
-        return self._unsupported(action, document, "duplicate_layer")
+        source_id = _required_target(action.target.layer_id, "target.layer_id")
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        source = document.get_layer(source_id)
+        duplicate = source.clone_deep(output_id, action.params.get("name"))
+        document.add_layer(duplicate, action.params.get("insert_index"))
+        if action.params.get("set_active", True):
+            document.set_active_layer(duplicate.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[duplicate.id])
 
     def _execute_rename_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Rename a layer without changing its ID or pixels."""
-        return self._unsupported(action, document, "rename_layer")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        layer.name = action.params["name"]
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
     def _execute_reorder_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Move a layer to a different stack index."""
-        return self._unsupported(action, document, "reorder_layer")
+        layer_id = _required_target(action.target.layer_id, "target.layer_id")
+        document.reorder_layer(layer_id, int(action.params["index"]))
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer_id])
 
     def _execute_set_active_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Set the document's active layer."""
         layer_id = _required_target(action.target.layer_id, "target.layer_id")
         document.set_active_layer(layer_id)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer_id])
+
+    def _execute_set_layer_visibility(self, document: DocumentState, action: Action) -> ActionResult:
+        """Set whether a layer participates in preview compositing."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        layer.visible = bool(action.params["visible"])
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_set_layer_opacity(self, document: DocumentState, action: Action) -> ActionResult:
+        """Set layer opacity."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        layer.opacity = float(action.params["opacity"])
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_set_blend_mode(self, document: DocumentState, action: Action) -> ActionResult:
+        """Set layer blend mode metadata."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        layer.blend_mode = BlendMode(action.params["blend_mode"])
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_merge_layers(self, document: DocumentState, action: Action) -> ActionResult:
+        """Merge layers using normal source-over compositing."""
+        mode = action.params.get("mode", "down")
+        if mode == "down":
+            return self._merge_down(document, action)
+        if mode == "visible":
+            return self._merge_visible(document, action)
+        if mode == "selected":
+            return self._merge_selected(document, action)
+        if mode == "flatten":
+            return self._flatten_image(document, action)
+        raise ValueError(f"unsupported merge mode {mode!r}")
 
     def _execute_select_rect(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a rectangular selection mask and optionally make it active."""
@@ -371,7 +510,20 @@ class Executor:
 
     def _execute_select_ellipse(self, document: DocumentState, action: Action) -> ActionResult:
         """Create an elliptical selection mask and set it active if requested."""
-        return self._unsupported(action, document, "select_ellipse")
+        mask_id = _required_target(action.target.mask_id, "target.mask_id")
+        data = _ellipse_mask(document.canvas.width, document.canvas.height, action.params["bbox_xyxy"])
+        mask = Mask(
+            id=mask_id,
+            name=action.params.get("name", mask_id),
+            data=data,
+            kind=MaskKind.SELECTION,
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
 
     def _execute_magic_wand_select(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a contiguous color-based selection from a seed point."""
@@ -416,6 +568,36 @@ class Executor:
         if action.params.get("set_active", False):
             document.set_active_selection(mask.id)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_grow_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a mask by growing another mask."""
+        output_id = _required_target(action.target.mask_id, "target.mask_id")
+        source = document.get_mask(action.params["source_mask_id"])
+        grown = source.dilate(int(action.params["pixels"]), output_id, action.params.get("name", output_id))
+        document.add_mask(grown)
+        if action.params.get("set_active", False):
+            document.set_active_selection(grown.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[grown.id])
+
+    def _execute_shrink_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a mask by shrinking another mask."""
+        output_id = _required_target(action.target.mask_id, "target.mask_id")
+        source = document.get_mask(action.params["source_mask_id"])
+        shrunk = source.erode(int(action.params["pixels"]), output_id, action.params.get("name", output_id))
+        document.add_mask(shrunk)
+        if action.params.get("set_active", False):
+            document.set_active_selection(shrunk.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[shrunk.id])
+
+    def _execute_invert_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create an inverted copy of another mask."""
+        output_id = _required_target(action.target.mask_id, "target.mask_id")
+        source = document.get_mask(action.params["source_mask_id"])
+        inverted = source.invert(output_id, action.params.get("name", output_id))
+        document.add_mask(inverted)
+        if action.params.get("set_active", False):
+            document.set_active_selection(inverted.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[inverted.id])
 
     def _execute_combine_masks(self, document: DocumentState, action: Action) -> ActionResult:
         """Union, intersect, or subtract masks and register the output mask."""
@@ -510,6 +692,29 @@ class Executor:
         layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
+    def _execute_blur_region(self, document: DocumentState, action: Action) -> ActionResult:
+        """Blur selected channels inside a write mask."""
+        _require_scipy("blur_region")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        if layer.pixels is None:
+            raise ValueError(f"target layer {layer.id!r} has no pixel data")
+        radius = float(action.params["radius"])
+        channels = _channels(action.params.get("channels", "rgb"))
+        edge_mode = action.params.get("edge_mode", "nearest")
+        proposed = np.array(layer.pixels, copy=True)
+        if radius > 0.0:
+            blurred = np.empty_like(layer.pixels)
+            for channel_index in range(4):
+                blurred[..., channel_index] = _ndimage.gaussian_filter(
+                    layer.pixels[..., channel_index],
+                    sigma=radius,
+                    mode=edge_mode,
+                )
+            for channel_name, channel_index in {"r": 0, "g": 1, "b": 2, "a": 3}.items():
+                if channel_name in channels:
+                    proposed[..., channel_index] = blurred[..., channel_index]
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
     def _execute_transform_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Move, scale, rotate, or align a layer according to action params."""
@@ -555,6 +760,125 @@ class Executor:
     def _execute_no_op(self, document: DocumentState, action: Action) -> ActionResult:
         """Execute a no-op action."""
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, metadata={"no_op": True})
+
+    def _merge_down(self, document: DocumentState, action: Action) -> ActionResult:
+        """Merge the target layer into the layer immediately below it."""
+        top_id = _required_target(action.target.layer_id, "target.layer_id")
+        top_index = _layer_index(document, top_id)
+        if top_index == 0:
+            raise ValueError("merge down requires a layer below the target layer")
+        lower = document.layers[top_index - 1]
+        top = document.layers[top_index]
+        _require_renderable_layer(lower)
+        _require_renderable_layer(top)
+        merged_pixels = _composite_layers_to_pixels(document, [lower, top])
+        lower.pixels = merged_pixels
+        lower.kind = LayerKind.RASTER
+        lower.opacity = 1.0
+        lower.visible = True
+        lower.blend_mode = BlendMode.NORMAL
+        lower.mask_id = None
+        if "output_layer_name" in action.params:
+            lower.name = action.params["output_layer_name"]
+        document.layers.pop(top_index)
+        _discard_group_references(document, {top.id})
+        if document.active_layer_id == top.id:
+            document.active_layer_id = lower.id
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            changed_layer_ids=[lower.id, top.id],
+            metadata={"mode": "down", "removed_layer_ids": [top.id], "output_layer_id": lower.id},
+        )
+
+    def _merge_visible(self, document: DocumentState, action: Action) -> ActionResult:
+        """Merge visible renderable layers into one output layer."""
+        source_indices = [
+            index
+            for index, layer in enumerate(document.layers)
+            if layer.visible and _is_renderable_layer(layer)
+        ]
+        if not source_indices:
+            raise ValueError("merge visible requires at least one visible renderable layer")
+        return self._replace_layers_with_merged(document, action, source_indices, "Merged Visible", mode="visible")
+
+    def _merge_selected(self, document: DocumentState, action: Action) -> ActionResult:
+        """Merge explicitly listed layers in current stack order."""
+        layer_ids = action.params["layer_ids"]
+        if len(set(layer_ids)) != len(layer_ids):
+            raise ValueError("selected merge layer_ids must be unique")
+        source_indices = sorted(_layer_index(document, layer_id) for layer_id in layer_ids)
+        return self._replace_layers_with_merged(document, action, source_indices, "Merged Layers", mode="selected")
+
+    def _flatten_image(self, document: DocumentState, action: Action) -> ActionResult:
+        """Flatten visible layers into one layer and discard the previous stack."""
+        source_layers = [layer for layer in document.layers if layer.visible and _is_renderable_layer(layer)]
+        if not source_layers:
+            raise ValueError("flatten requires at least one visible renderable layer")
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        output_name = action.params.get("output_layer_name", "Flattened Image")
+        merged_pixels = _composite_layers_to_pixels(document, source_layers, background=document.canvas.background_color_rgba)
+        merged_pixels[..., 3] = 1.0
+        old_layer_ids = [layer.id for layer in document.layers]
+        document.layers = [
+            Layer(
+                id=output_id,
+                name=output_name,
+                kind=LayerKind.RASTER,
+                pixels=merged_pixels,
+                opacity=1.0,
+                visible=True,
+                blend_mode=BlendMode.NORMAL,
+            )
+        ]
+        document.active_layer_id = output_id
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            created_layer_ids=[output_id],
+            changed_layer_ids=old_layer_ids,
+            metadata={"mode": "flatten", "removed_layer_ids": old_layer_ids, "output_layer_id": output_id},
+        )
+
+    def _replace_layers_with_merged(
+        self,
+        document: DocumentState,
+        action: Action,
+        source_indices: list[int],
+        default_name: str,
+        mode: str,
+    ) -> ActionResult:
+        """Composite source layers, remove them, and insert one merged layer."""
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        source_layers = [document.layers[index] for index in source_indices]
+        source_ids = [layer.id for layer in source_layers]
+        if output_id in {layer.id for index, layer in enumerate(document.layers) if index not in source_indices}:
+            raise ValueError(f"output layer id {output_id!r} already exists")
+        for layer in source_layers:
+            _require_renderable_layer(layer)
+        merged_pixels = _composite_layers_to_pixels(document, source_layers)
+        insert_index = min(source_indices)
+        for index in sorted(source_indices, reverse=True):
+            document.layers.pop(index)
+        _discard_group_references(document, set(source_ids))
+        output_layer = Layer(
+            id=output_id,
+            name=action.params.get("output_layer_name", default_name),
+            kind=LayerKind.RASTER,
+            pixels=merged_pixels,
+            opacity=1.0,
+            visible=True,
+            blend_mode=BlendMode.NORMAL,
+        )
+        document.add_layer(output_layer, insert_index)
+        document.active_layer_id = output_id
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            created_layer_ids=[output_id],
+            changed_layer_ids=source_ids,
+            metadata={"mode": mode, "removed_layer_ids": source_ids, "output_layer_id": output_id},
+        )
 
     def _validator(self) -> Validator:
         """Return the configured validator or a default strict validator."""
@@ -612,6 +936,42 @@ def _required_target(value: Optional[str], field_name: str) -> str:
     return value
 
 
+def _resize_rgba_centered(
+    pixels: np.ndarray,
+    new_width: int,
+    new_height: int,
+    fill_color: tuple[float, float, float, float],
+) -> np.ndarray:
+    """Return a centered crop/pad copy of an RGBA pixel array."""
+    if pixels.ndim != 3 or pixels.shape[2] != 4:
+        raise ValueError("pixel arrays must have shape H x W x 4")
+    output = np.zeros((new_height, new_width, 4), dtype=np.float32)
+    output[..., :] = fill_color
+    src_y, dst_y, copy_h = _centered_copy_axis(pixels.shape[0], new_height)
+    src_x, dst_x, copy_w = _centered_copy_axis(pixels.shape[1], new_width)
+    output[dst_y : dst_y + copy_h, dst_x : dst_x + copy_w, :] = pixels[src_y : src_y + copy_h, src_x : src_x + copy_w, :]
+    return output
+
+
+def _resize_mask_centered(data: np.ndarray, new_width: int, new_height: int) -> np.ndarray:
+    """Return a centered crop/pad copy of a mask array."""
+    if data.ndim != 2:
+        raise ValueError("mask arrays must be 2D")
+    output = np.zeros((new_height, new_width), dtype=np.float32)
+    src_y, dst_y, copy_h = _centered_copy_axis(data.shape[0], new_height)
+    src_x, dst_x, copy_w = _centered_copy_axis(data.shape[1], new_width)
+    output[dst_y : dst_y + copy_h, dst_x : dst_x + copy_w] = data[src_y : src_y + copy_h, src_x : src_x + copy_w]
+    return output
+
+
+def _centered_copy_axis(old_size: int, new_size: int) -> tuple[int, int, int]:
+    """Return source start, destination start, and count for centered copy."""
+    copy_size = min(old_size, new_size)
+    source_start = max((old_size - new_size) // 2, 0)
+    destination_start = max((new_size - old_size) // 2, 0)
+    return source_start, destination_start, copy_size
+
+
 def _load_rgba_image(path: Path) -> np.ndarray:
     """Load an image file as full-resolution straight-alpha RGBA floats."""
     try:
@@ -639,6 +999,102 @@ def _color_from_params(params: dict[str, Any], default: tuple[float, float, floa
     if "color" in params:
         return _parse_color(params["color"])
     return default
+
+
+def _require_scipy(operation: str) -> None:
+    """Raise a clear error if a SciPy-backed operation is unavailable."""
+    if _ndimage is None:
+        raise RuntimeError(f"{operation} requires scipy.ndimage")
+
+
+def _channels(value: Any) -> set[str]:
+    """Return normalized RGBA channel names from schema-validated params."""
+    aliases = {
+        "rgb": {"r", "g", "b"},
+        "alpha": {"a"},
+        "rgba": {"r", "g", "b", "a"},
+    }
+    if isinstance(value, str):
+        return set(aliases.get(value, {value}))
+    return {str(item) for item in value}
+
+
+def _layer_index(document: DocumentState, layer_id: str) -> int:
+    """Return a layer index by ID."""
+    for index, layer in enumerate(document.layers):
+        if layer.id == layer_id:
+            return index
+    raise KeyError(f"layer id {layer_id!r} does not exist")
+
+
+def _is_renderable_layer(layer: Layer) -> bool:
+    """Return whether a layer can participate in raster compositing."""
+    return LayerKind(layer.kind) is not LayerKind.GROUP and layer.pixels is not None
+
+
+def _require_renderable_layer(layer: Layer) -> None:
+    """Validate that a layer can be rendered by the prototype compositor."""
+    if not _is_renderable_layer(layer):
+        raise ValueError(f"layer {layer.id!r} has no renderable pixel data")
+    if BlendMode(layer.blend_mode) is not BlendMode.NORMAL:
+        raise NotImplementedError("prototype merge supports normal blend mode only")
+    if not _is_identity_transform(layer):
+        raise NotImplementedError("prototype merge does not render transformed layers")
+
+
+def _composite_layers_to_pixels(
+    document: DocumentState,
+    layers: list[Layer],
+    background: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
+) -> np.ndarray:
+    """Composite layers into one straight-alpha full-canvas RGBA array."""
+    output = np.zeros((document.canvas.height, document.canvas.width, 4), dtype=np.float32)
+    output[..., :] = background
+    for layer in layers:
+        _require_renderable_layer(layer)
+        if not layer.visible:
+            continue
+        layer_pixels = layer.pixels.astype(np.float32, copy=False)
+        effective_alpha = layer_pixels[..., 3:4] * np.float32(layer.opacity)
+        if layer.mask_id is not None:
+            effective_alpha = effective_alpha * document.get_mask(layer.mask_id).data[..., np.newaxis]
+        output = _source_over_rgba(output, layer_pixels[..., :3], effective_alpha)
+    return output
+
+
+def _source_over_rgba(destination: np.ndarray, source_rgb: np.ndarray, source_alpha: np.ndarray) -> np.ndarray:
+    """Composite source RGB/effective alpha over a straight-alpha RGBA destination."""
+    destination_rgb = destination[..., :3]
+    destination_alpha = destination[..., 3:4]
+    output_alpha = source_alpha + destination_alpha * (1.0 - source_alpha)
+    output_premultiplied = (
+        source_rgb * source_alpha
+        + destination_rgb * destination_alpha * (1.0 - source_alpha)
+    )
+    output_rgb = np.zeros_like(destination_rgb)
+    np.divide(output_premultiplied, output_alpha, out=output_rgb, where=output_alpha > 0.0)
+    output = np.concatenate([output_rgb, output_alpha], axis=2)
+    return np.clip(output, 0.0, 1.0).astype(np.float32)
+
+
+def _is_identity_transform(layer: Layer) -> bool:
+    """Return whether a layer transform is the default identity transform."""
+    transform = layer.transform
+    return (
+        float(transform.x) == 0.0
+        and float(transform.y) == 0.0
+        and float(transform.scale_x) == 1.0
+        and float(transform.scale_y) == 1.0
+        and float(transform.rotation_degrees) == 0.0
+    )
+
+
+def _discard_group_references(document: DocumentState, removed_layer_ids: set[str]) -> None:
+    """Remove stale group metadata references after batch layer replacement."""
+    for layer in document.layers:
+        layer.child_layer_ids = [layer_id for layer_id in layer.child_layer_ids if layer_id not in removed_layer_ids]
+        if layer.parent_group_id in removed_layer_ids:
+            layer.parent_group_id = None
 
 
 def _parse_color(value: Any) -> tuple[float, float, float, float]:

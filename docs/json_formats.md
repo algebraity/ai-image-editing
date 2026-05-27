@@ -579,6 +579,44 @@ Every action uses this envelope:
 
 These are the executable prototype action types.
 
+### `resize_canvas`
+
+```json
+{
+  "id": "action_resize_canvas",
+  "type": "resize_canvas",
+  "params": {
+    "width": 1280,
+    "height": 960,
+    "anchor": "center",
+    "fill_color": "#00000000"
+  }
+}
+```
+
+The prototype executor resizes every layer pixel array and every mask around the
+canvas center. Expanded layer pixels are filled with `fill_color`, which defaults
+to transparent black. Expanded mask pixels are filled with `0.0`.
+
+### `crop`
+
+```json
+{
+  "id": "action_crop_document",
+  "type": "crop",
+  "params": {
+    "bbox_xyxy": [64, 64, 704, 704],
+    "scope": "document"
+  }
+}
+```
+
+`scope` is `document`, `layer`, or `mask`. A document crop changes the canvas
+size and crops every layer and mask. A layer crop keeps the canvas size and
+fills pixels outside the bounding box with `fill_color`, which defaults to
+transparent black. A mask crop keeps the canvas size and sets mask values outside
+the bounding box to `0.0`.
+
 ### `import_image_as_layer`
 
 ```json
@@ -634,6 +672,77 @@ Optional `color_rgba` may be used instead of `color`:
 Prototype layer `width` and `height`, if supplied, must match the document
 canvas.
 
+### `delete_layer`
+
+```json
+{
+  "id": "action_delete_layer",
+  "type": "delete_layer",
+  "target": {
+    "layer_id": "layer_draft"
+  },
+  "params": {}
+}
+```
+
+The layer is removed from the document stack. Document invariants clear stale
+active-layer and group-child references when necessary.
+
+### `duplicate_layer`
+
+```json
+{
+  "id": "action_duplicate_layer",
+  "type": "duplicate_layer",
+  "target": {
+    "layer_id": "layer_source",
+    "output_layer_id": "layer_source_copy"
+  },
+  "params": {
+    "name": "source copy",
+    "insert_index": 2,
+    "set_active": true
+  }
+}
+```
+
+Duplication creates an independent deep copy of the source layer, including
+pixel data and layer metadata.
+
+### `rename_layer`
+
+```json
+{
+  "id": "action_rename_layer",
+  "type": "rename_layer",
+  "target": {
+    "layer_id": "layer_source"
+  },
+  "params": {
+    "name": "clean source"
+  }
+}
+```
+
+The layer ID remains stable; only the display name changes.
+
+### `reorder_layer`
+
+```json
+{
+  "id": "action_reorder_layer",
+  "type": "reorder_layer",
+  "target": {
+    "layer_id": "layer_border"
+  },
+  "params": {
+    "index": 3
+  }
+}
+```
+
+Layer stack indices are bottom-to-top and zero-based.
+
 ### `set_active_layer`
 
 ```json
@@ -646,6 +755,97 @@ canvas.
   "params": {}
 }
 ```
+
+### `set_layer_visibility`
+
+```json
+{
+  "id": "action_hide_reference",
+  "type": "set_layer_visibility",
+  "target": {
+    "layer_id": "layer_reference"
+  },
+  "params": {
+    "visible": false
+  }
+}
+```
+
+Visibility controls preview compositing and visible-layer merge operations.
+
+### `set_layer_opacity`
+
+```json
+{
+  "id": "action_set_opacity",
+  "type": "set_layer_opacity",
+  "target": {
+    "layer_id": "layer_overlay"
+  },
+  "params": {
+    "opacity": 0.5
+  }
+}
+```
+
+Opacity is a unit value in `[0, 1]`.
+
+### `set_blend_mode`
+
+```json
+{
+  "id": "action_set_blend_mode",
+  "type": "set_blend_mode",
+  "target": {
+    "layer_id": "layer_shadow"
+  },
+  "params": {
+    "blend_mode": "normal"
+  }
+}
+```
+
+Supported blend-mode metadata values are `normal`, `multiply`, `screen`,
+`overlay`, `add`, and `subtract`. The current merge executor composites only
+`normal` layers.
+
+### `merge_layers`
+
+```json
+{
+  "id": "action_merge_down",
+  "type": "merge_layers",
+  "target": {
+    "layer_id": "layer_highlight"
+  },
+  "params": {
+    "mode": "down",
+    "output_layer_name": "merged highlight"
+  }
+}
+```
+
+```json
+{
+  "id": "action_merge_selected",
+  "type": "merge_layers",
+  "target": {
+    "output_layer_id": "layer_merged"
+  },
+  "params": {
+    "mode": "selected",
+    "layer_ids": ["layer_base", "layer_shadow", "layer_highlight"],
+    "output_layer_name": "merged visible detail"
+  }
+}
+```
+
+`mode` is `down`, `visible`, `selected`, or `flatten`. `down` merges the target
+layer into the layer immediately below it and preserves the lower layer's ID.
+The other modes create `target.output_layer_id`. Prototype merging uses
+straight-alpha source-over compositing, supports normal blend mode, and requires
+identity layer transforms. `flatten` discards hidden layers and writes an opaque
+final alpha channel.
 
 ### `select_rect`
 
@@ -663,6 +863,25 @@ canvas.
   }
 }
 ```
+
+### `select_ellipse`
+
+```json
+{
+  "id": "action_select_ellipse",
+  "type": "select_ellipse",
+  "target": {
+    "mask_id": "mask_soft_eye_region"
+  },
+  "params": {
+    "name": "eye region",
+    "bbox_xyxy": [160, 140, 260, 240],
+    "set_active": true
+  }
+}
+```
+
+The ellipse is rasterized inside `bbox_xyxy` as a hard selection mask.
 
 ### `select_color_range`
 
@@ -760,6 +979,45 @@ reserved for a later executor implementation.
 `operation` is one of `union`, `intersect`, or `subtract`. `subtract` requires
 exactly two masks and computes `mask_ids[0] - mask_ids[1]`.
 
+### `grow_mask`
+
+```json
+{
+  "id": "action_grow_selection",
+  "type": "grow_mask",
+  "target": {
+    "mask_id": "mask_selection_grown"
+  },
+  "params": {
+    "source_mask_id": "mask_selection",
+    "pixels": 4,
+    "name": "selection grown 4px",
+    "set_active": true
+  }
+}
+```
+
+### `shrink_mask`
+
+```json
+{
+  "id": "action_shrink_selection",
+  "type": "shrink_mask",
+  "target": {
+    "mask_id": "mask_selection_shrunk"
+  },
+  "params": {
+    "source_mask_id": "mask_selection",
+    "pixels": 4,
+    "name": "selection shrunk 4px",
+    "set_active": true
+  }
+}
+```
+
+Grow and shrink create new masks using a disk-shaped pixel footprint. Hard masks
+remain hard; soft masks use gray-scale morphology.
+
 ### `feather_mask`
 
 ```json
@@ -778,6 +1036,25 @@ exactly two masks and computes `mask_ids[0] - mask_ids[1]`.
 ```
 
 `radius` is a nonnegative Gaussian sigma in pixels.
+
+### `invert_mask`
+
+```json
+{
+  "id": "action_invert_selection",
+  "type": "invert_mask",
+  "target": {
+    "mask_id": "mask_selection_inverse"
+  },
+  "params": {
+    "source_mask_id": "mask_selection",
+    "name": "selection inverse",
+    "set_active": true
+  }
+}
+```
+
+The output mask uses `1.0 - source_value` for every pixel.
 
 ### `draw_shape`
 
@@ -846,6 +1123,28 @@ Supported prototype modes are `replace_rgb_preserve_alpha`, `replace_rgba`, and
 `source_over`. The executor applies the action through `write_mask_id`, so soft
 masks produce blended paint edges.
 
+### `blur_region`
+
+```json
+{
+  "id": "action_blur_skin",
+  "type": "blur_region",
+  "target": {
+    "layer_id": "layer_portrait"
+  },
+  "write_mask_id": "mask_skin",
+  "params": {
+    "radius": 2.0,
+    "channels": "rgb",
+    "edge_mode": "nearest"
+  }
+}
+```
+
+`channels` may be `rgb`, `alpha`, `rgba`, one channel name, or a list of channel
+names drawn from `r`, `g`, `b`, and `a`. `edge_mode` is passed to the Gaussian
+filter and may be `reflect`, `constant`, `nearest`, `mirror`, or `wrap`.
+
 ### `clear_region`
 
 ```json
@@ -904,9 +1203,7 @@ available.
 These action families exist in the enum but do not yet have finalized executable
 prototype schemas:
 
-- new-document and canvas resize actions
-- layer delete, duplicate, rename, reorder, visibility, opacity, blend mode, and
-  merge actions
+- new-document actions
 - polygon and alpha selections
 - path, brush, gradient, cut, copy, paste, transform, and align actions
 - perception actions
@@ -963,8 +1260,64 @@ should reference the source session and use canonical action JSON in the target.
     ],
     "available_tools": [
       {
+        "name": "resize_canvas",
+        "description": "Resize the canvas around its center."
+      },
+      {
+        "name": "crop",
+        "description": "Crop the document, or clear outside a crop on one layer or mask."
+      },
+      {
         "name": "import_image_as_layer",
         "description": "Import an image file into a full-canvas raster layer."
+      },
+      {
+        "name": "create_layer",
+        "description": "Create a new full-canvas layer."
+      },
+      {
+        "name": "delete_layer",
+        "description": "Remove a layer from the document stack."
+      },
+      {
+        "name": "duplicate_layer",
+        "description": "Create a deep copy of a layer."
+      },
+      {
+        "name": "rename_layer",
+        "description": "Rename a layer without changing its ID."
+      },
+      {
+        "name": "reorder_layer",
+        "description": "Move a layer to a new stack index."
+      },
+      {
+        "name": "set_active_layer",
+        "description": "Set the active layer."
+      },
+      {
+        "name": "set_layer_visibility",
+        "description": "Show or hide a layer."
+      },
+      {
+        "name": "set_layer_opacity",
+        "description": "Set a layer's opacity."
+      },
+      {
+        "name": "set_blend_mode",
+        "description": "Set a layer's blend mode metadata."
+      },
+      {
+        "name": "merge_layers",
+        "description": "Merge layers using normal source-over compositing."
+      },
+      {
+        "name": "select_rect",
+        "description": "Create a rectangular selection mask."
+      },
+      {
+        "name": "select_ellipse",
+        "description": "Create an elliptical selection mask."
       },
       {
         "name": "select_color_range",
@@ -979,20 +1332,48 @@ should reference the source session and use canonical action JSON in the target.
         "description": "Create a mask from a deterministic geometric shape."
       },
       {
+        "name": "grow_mask",
+        "description": "Grow a mask by a pixel radius."
+      },
+      {
+        "name": "shrink_mask",
+        "description": "Shrink a mask by a pixel radius."
+      },
+      {
+        "name": "invert_mask",
+        "description": "Invert a mask."
+      },
+      {
+        "name": "combine_masks",
+        "description": "Combine masks with union, intersect, or subtract."
+      },
+      {
+        "name": "feather_mask",
+        "description": "Create a softened copy of a mask."
+      },
+      {
+        "name": "draw_shape",
+        "description": "Draw a deterministic geometric shape on a target layer."
+      },
+      {
         "name": "paint_bucket_fill",
         "description": "Fill the current write mask on a target layer with a color."
+      },
+      {
+        "name": "blur_region",
+        "description": "Apply Gaussian blur to selected channels through a write mask."
       },
       {
         "name": "clear_region",
         "description": "Clear pixels or alpha inside a write mask on a target layer."
       },
       {
-        "name": "create_layer",
-        "description": "Create a new layer."
+        "name": "export_flat",
+        "description": "Export a flattened preview image."
       },
       {
-        "name": "draw_shape",
-        "description": "Draw a deterministic geometric shape on a target layer."
+        "name": "no_op",
+        "description": "Execute no document mutation."
       }
     ],
     "asset_refs": {

@@ -46,6 +46,7 @@ class ActionType(str, Enum):
     EXPORT_FLAT = "export_flat"
     EXPORT_LAYERED_BUNDLE = "export_layered_bundle"
     RESIZE_CANVAS = "resize_canvas"
+    CROP = "crop"
 
     # Layer actions
     CREATE_LAYER = "create_layer"
@@ -80,6 +81,7 @@ class ActionType(str, Enum):
     BRUSH_STROKE = "brush_stroke"
     PAINT_BUCKET_FILL = "paint_bucket_fill"
     GRADIENT_FILL = "gradient_fill"
+    BLUR_REGION = "blur_region"
     CLEAR_REGION = "clear_region"
     CUT = "cut"
     COPY = "copy"
@@ -335,6 +337,7 @@ class Action:
         return self.type in {
             ActionType.DRAW_SHAPE,
             ActionType.PAINT_BUCKET_FILL,
+            ActionType.BLUR_REGION,
             ActionType.CLEAR_REGION,
         }
 
@@ -605,6 +608,31 @@ def _validate_create_layer(action: Action) -> None:
         _rgba_sequence(action.params["color_rgba"], "params.color_rgba")
 
 
+def _validate_resize_canvas(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"width", "height", "anchor", "fill_color"})
+    _positive_int(action.params.get("width"), "params.width")
+    _positive_int(action.params.get("height"), "params.height")
+    anchor = action.params.get("anchor", "center")
+    if anchor != "center":
+        raise ValueError("params.anchor must be 'center'")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_crop(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"bbox_xyxy", "scope", "fill_color"})
+    _bbox_xyxy(action.params.get("bbox_xyxy"), "params.bbox_xyxy")
+    scope = action.params.get("scope", "document")
+    if scope not in {"document", "layer", "mask"}:
+        raise ValueError("params.scope must be 'document', 'layer', or 'mask'")
+    if scope == "layer":
+        _require_target_id(action.target.layer_id, "target.layer_id")
+    if scope == "mask":
+        _require_target_id(action.target.mask_id, "target.mask_id")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
 def _validate_import_image_as_layer(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
@@ -630,7 +658,84 @@ def _validate_set_active_layer(action: Action) -> None:
     _require_target_id(action.target.layer_id, "target.layer_id")
 
 
+def _validate_delete_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", set())
+    _require_target_id(action.target.layer_id, "target.layer_id")
+
+
+def _validate_duplicate_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"name", "insert_index", "set_active"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _optional_nonnegative_int(action.params.get("insert_index"), "params.insert_index")
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_rename_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"name"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _required_string(action.params, "name", "params.name")
+
+
+def _validate_reorder_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"index"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _nonnegative_int(action.params.get("index"), "params.index")
+
+
+def _validate_set_layer_visibility(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"visible"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _bool_value(action.params.get("visible"), "params.visible")
+
+
+def _validate_set_layer_opacity(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"opacity"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _optional_unit_number(action.params.get("opacity"), "params.opacity")
+
+
+def _validate_set_blend_mode(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"blend_mode"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _optional_enum_string(
+        action.params.get("blend_mode"),
+        {"normal", "multiply", "screen", "overlay", "add", "subtract"},
+        "params.blend_mode",
+    )
+
+
+def _validate_merge_layers(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"mode", "layer_ids", "output_layer_name"})
+    mode = action.params.get("mode", "down")
+    if mode not in {"down", "visible", "selected", "flatten"}:
+        raise ValueError("params.mode must be 'down', 'visible', 'selected', or 'flatten'")
+    if mode == "down":
+        _require_target_id(action.target.layer_id, "target.layer_id")
+    if mode in {"visible", "selected", "flatten"}:
+        _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    if mode == "selected":
+        layer_ids = _string_list(action.params.get("layer_ids"), "params.layer_ids")
+        if len(layer_ids) < 2:
+            raise ValueError("selected merge requires at least two layer_ids")
+    elif "layer_ids" in action.params:
+        raise ValueError("params.layer_ids is only valid for selected merge")
+    if "output_layer_name" in action.params:
+        _optional_string(action.params["output_layer_name"], "params.output_layer_name")
+
+
 def _validate_select_rect(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"name", "bbox_xyxy", "set_active"})
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _bbox_xyxy(action.params.get("bbox_xyxy"), "params.bbox_xyxy")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_select_ellipse(action: Action) -> None:
     _reject_unknown_keys(action.params, "params", {"name", "bbox_xyxy", "set_active"})
     _require_target_id(action.target.mask_id, "target.mask_id")
     _bbox_xyxy(action.params.get("bbox_xyxy"), "params.bbox_xyxy")
@@ -702,6 +807,29 @@ def _validate_create_mask_from_shape(action: Action) -> None:
     _bool_value(action.params.get("set_active", False), "params.set_active")
 
 
+def _validate_grow_mask(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"source_mask_id", "pixels", "name", "set_active"})
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    _nonnegative_int(action.params.get("pixels"), "params.pixels")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _bool_value(action.params.get("set_active", False), "params.set_active")
+
+
+def _validate_shrink_mask(action: Action) -> None:
+    _validate_grow_mask(action)
+
+
+def _validate_invert_mask(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"source_mask_id", "name", "set_active"})
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _bool_value(action.params.get("set_active", False), "params.set_active")
+
+
 def _validate_combine_masks(action: Action) -> None:
     _reject_unknown_keys(action.params, "params", {"operation", "mask_ids", "name"})
     _require_target_id(action.target.mask_id, "target.mask_id")
@@ -755,6 +883,16 @@ def _validate_paint_bucket_fill(action: Action) -> None:
         raise ValueError("params.mode must be 'replace_rgb_preserve_alpha', 'replace_rgba', or 'source_over'")
 
 
+def _validate_blur_region(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"radius", "channels", "edge_mode"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _nonnegative_number(action.params.get("radius"), "params.radius")
+    _validate_channels(action.params.get("channels", "rgb"), "params.channels")
+    edge_mode = action.params.get("edge_mode", "nearest")
+    if edge_mode not in {"reflect", "constant", "nearest", "mirror", "wrap"}:
+        raise ValueError("params.edge_mode must be one of 'reflect', 'constant', 'nearest', 'mirror', or 'wrap'")
+
+
 def _validate_clear_region(action: Action) -> None:
     _reject_unknown_keys(action.params, "params", {"mode", "preserve_rgb"})
     _require_target_id(action.target.layer_id, "target.layer_id")
@@ -774,17 +912,32 @@ def _validate_no_op(action: Action) -> None:
 
 
 _PARAM_VALIDATORS = {
+    ActionType.RESIZE_CANVAS: _validate_resize_canvas,
+    ActionType.CROP: _validate_crop,
     ActionType.IMPORT_IMAGE_AS_LAYER: _validate_import_image_as_layer,
     ActionType.CREATE_LAYER: _validate_create_layer,
+    ActionType.DELETE_LAYER: _validate_delete_layer,
+    ActionType.DUPLICATE_LAYER: _validate_duplicate_layer,
+    ActionType.RENAME_LAYER: _validate_rename_layer,
+    ActionType.REORDER_LAYER: _validate_reorder_layer,
     ActionType.SET_ACTIVE_LAYER: _validate_set_active_layer,
+    ActionType.SET_LAYER_VISIBILITY: _validate_set_layer_visibility,
+    ActionType.SET_LAYER_OPACITY: _validate_set_layer_opacity,
+    ActionType.SET_BLEND_MODE: _validate_set_blend_mode,
+    ActionType.MERGE_LAYERS: _validate_merge_layers,
     ActionType.SELECT_RECT: _validate_select_rect,
+    ActionType.SELECT_ELLIPSE: _validate_select_ellipse,
     ActionType.SELECT_COLOR_RANGE: _validate_select_color_range,
     ActionType.MAGIC_WAND_SELECT: _validate_magic_wand_select,
     ActionType.CREATE_MASK_FROM_SHAPE: _validate_create_mask_from_shape,
+    ActionType.GROW_MASK: _validate_grow_mask,
+    ActionType.SHRINK_MASK: _validate_shrink_mask,
+    ActionType.INVERT_MASK: _validate_invert_mask,
     ActionType.COMBINE_MASKS: _validate_combine_masks,
     ActionType.FEATHER_MASK: _validate_feather_mask,
     ActionType.DRAW_SHAPE: _validate_draw_shape,
     ActionType.PAINT_BUCKET_FILL: _validate_paint_bucket_fill,
+    ActionType.BLUR_REGION: _validate_blur_region,
     ActionType.CLEAR_REGION: _validate_clear_region,
     ActionType.EXPORT_FLAT: _validate_export_flat,
     ActionType.NO_OP: _validate_no_op,
@@ -842,6 +995,29 @@ def _validate_color(value: Any, field_name: str) -> None:
             raise ValueError(f"{field_name} must contain hexadecimal digits") from exc
         return
     _rgba_sequence(value, field_name)
+
+
+def _validate_channels(value: Any, field_name: str) -> set[str]:
+    allowed = {"r", "g", "b", "a"}
+    aliases = {
+        "rgb": {"r", "g", "b"},
+        "alpha": {"a"},
+        "rgba": {"r", "g", "b", "a"},
+    }
+    if isinstance(value, str):
+        if value in aliases:
+            return aliases[value]
+        if value in allowed:
+            return {value}
+        raise ValueError(f"{field_name} must be 'rgb', 'alpha', 'rgba', or a list of channels")
+    if not isinstance(value, list) or len(value) == 0:
+        raise TypeError(f"{field_name} must be a string or a non-empty list")
+    channels: set[str] = set()
+    for item in value:
+        if item not in allowed:
+            raise ValueError(f"{field_name} entries must be one of {sorted(allowed)!r}")
+        channels.add(item)
+    return channels
 
 
 def _rgba_sequence(value: Any, field_name: str) -> tuple[float, float, float, float]:
@@ -960,6 +1136,22 @@ def _optional_nonnegative_int(value: Any, field_name: str) -> None:
         raise TypeError(f"{field_name} must be an integer or None")
     if value < 0:
         raise ValueError(f"{field_name} must not be negative")
+
+
+def _positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{field_name} must be greater than zero")
+    return value
+
+
+def _nonnegative_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if value < 0:
+        raise ValueError(f"{field_name} must not be negative")
+    return value
 
 
 def _number(value: Any, field_name: str) -> float:
