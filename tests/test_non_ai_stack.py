@@ -17,9 +17,16 @@ import numpy as np
 from PIL import Image
 
 from ai_edit_kernel.document.document_state import CanvasSpec, DocumentState
+from ai_edit_kernel.planning import (
+    AIPlanner,
+    PlannerOptions,
+    StaticPlannerBackend,
+    available_action_specs,
+    planner_output_schema,
+)
 from ai_edit_kernel.runtime.executor import ExecutionContext, Executor
 from ai_edit_kernel.runtime.validator import Validator
-from ai_edit_kernel.schema.actions import ActionBatch, ActionResult, ActionStatus, SCHEMA_VERSION
+from ai_edit_kernel.schema.actions import ActionBatch, ActionResult, ActionStatus, ActionType, SCHEMA_VERSION
 from ai_edit_kernel.trace.trace_logger import TraceLogger
 
 
@@ -1041,6 +1048,298 @@ class NonAIStackTests(unittest.TestCase):
             self.assertEqual(image.getpixel((0, 0))[3], 255)
         self.assertEqual(results[0].output_assets["path"], str(output_path))
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_40_transforms_layer_masks_and_text(self) -> None:
+        """Exercise transform aliases, layer masks, and rasterized text layers."""
+        case_name = "test_40_transforms_layer_masks_and_text"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 96, 96),
+            create_layer("action_002", "layer_base", "base", color="#00000000"),
+            action(
+                "action_003",
+                "draw_shape",
+                params={"shape": rectangle([24, 24, 72, 72]), "fill": {"color": "#ff0000"}, "stroke": None},
+                target={"layer_id": "layer_base"},
+                write_mask_id="mask_full_canvas",
+            ),
+            action("action_004", "move_layer", params={"dx": 4, "dy": 0}, target={"layer_id": "layer_base"}),
+            action("action_005", "scale_layer", params={"scale_x": 0.9, "scale_y": 0.9, "anchor": [48, 48]}, target={"layer_id": "layer_base"}),
+            action("action_006", "rotate_layer", params={"angle_degrees": 8, "anchor": [48, 48]}, target={"layer_id": "layer_base"}),
+            action("action_007", "flip_layer", params={"horizontal": True, "vertical": False, "anchor": [48, 48]}, target={"layer_id": "layer_base"}),
+            action("action_008", "align_layer", params={"horizontal": "center", "vertical": "center"}, target={"layer_id": "layer_base"}),
+            action("action_009", "select_from_alpha", params={"threshold": 0.01, "name": "alpha"}, target={"layer_id": "layer_base", "mask_id": "mask_alpha"}),
+            action("action_010", "add_layer_mask", params={"mode": "from_mask", "source_mask_id": "mask_alpha"}, target={"layer_id": "layer_base", "mask_id": "mask_layer"}),
+            action("action_011", "apply_layer_mask", params={"remove_mask": True}, target={"layer_id": "layer_base"}),
+            action("action_012", "create_text_layer", params={"text": "AI", "x": 8, "y": 8, "font_size": 24, "color": "#00ff00"}, target={"output_layer_id": "layer_text"}),
+            action("action_013", "edit_text_layer", params={"text": "OK", "x": 8, "y": 8, "font_size": 24, "color": "#0000ff"}, target={"layer_id": "layer_text"}),
+            action("action_014", "rasterize_text_layer", params={}, target={"layer_id": "layer_text"}),
+            export_flat("action_015", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 96, 96, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertIsNone(doc.get_layer("layer_base").mask_id)
+        self.assertEqual(doc.get_layer("layer_text").kind.value, "raster")
+        self.assertGreater(float(doc.get_layer("layer_base").pixels[..., 3].max()), 0.5)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_41_paint_color_filters_and_mask_cleanup(self) -> None:
+        """Exercise path painting, fills, color adjustment, filters, and mask cleanup."""
+        case_name = "test_41_paint_color_filters_and_mask_cleanup"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 72, 72),
+            create_layer("action_002", "layer_paint", "paint", color="#00000000"),
+            action("action_003", "select_polygon", params={"points": [[8, 8], [64, 12], [48, 64]], "name": "tri"}, target={"mask_id": "mask_tri"}),
+            action("action_004", "save_selection_as_mask", params={"source_mask_id": "mask_tri", "name": "saved"}, target={"mask_id": "mask_saved"}),
+            action("action_005", "gradient_fill", params={"type": "linear", "start": [0, 0], "end": [72, 72], "colors": ["#ff0000", "#0000ff"]}, target={"layer_id": "layer_paint"}, write_mask_id="mask_saved"),
+            action("action_006", "pattern_fill", params={"pattern": "checkerboard", "colors": ["#00ff00", "#00000000"], "cell_size": 8, "mode": "source_over"}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_007", "brush_stroke", params={"points": [[4, 36], [68, 36]], "color": "#ffffff", "width": 5}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_008", "draw_path", params={"points": [[36, 4], [36, 68]], "color": "#ffff00", "width": 3}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_009", "erase_stroke", params={"points": [[12, 12], [60, 60]], "width": 4}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_010", "adjust_brightness_contrast", params={"brightness": 0.02, "contrast": 1.1}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_011", "adjust_hue_saturation", params={"hue_degrees": 20, "saturation": 1.05}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_012", "adjust_levels", params={"in_black": 0.0, "in_white": 1.0, "gamma": 1.0}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_013", "adjust_curves", params={"points": [[0.0, 0.0], [1.0, 0.9]]}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_014", "colorize", params={"color": "#ff66cc", "amount": 0.15}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_015", "replace_color", params={"source_color": "#ff66cc", "target_color": "#66ccff", "tolerance": 0.8, "softness": 0.2}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_016", "desaturate", params={"amount": 0.1}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_017", "blur_region", params={"radius": 0.5, "channels": "rgb"}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_018", "sharpen_region", params={"radius": 0.5, "amount": 0.5}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_019", "noise_reduce", params={"radius": 1}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_020", "median_filter", params={"radius": 1, "channels": "rgb"}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_021", "edge_detect", params={"mode": "luminance"}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_022", "stroke_selection", params={"source_mask_id": "mask_saved", "radius": 2, "color": "#ffffff"}, target={"layer_id": "layer_paint"}, write_mask_id="mask_full_canvas"),
+            action("action_023", "refine_selection", params={"source_mask_id": "mask_saved", "threshold": 0.5, "grow_pixels": 1, "shrink_pixels": 1, "feather_radius": 0.5, "name": "refined"}, target={"mask_id": "mask_refined"}),
+            action("action_024", "remove_small_islands", params={"source_mask_id": "mask_refined", "min_area": 2, "name": "clean"}, target={"mask_id": "mask_clean"}),
+            action("action_025", "fill_mask_holes", params={"source_mask_id": "mask_clean", "name": "filled"}, target={"mask_id": "mask_filled"}),
+            export_flat("action_026", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 72, 72, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertIn("mask_filled", doc.masks)
+        self.assertGreater(float(doc.get_layer("layer_paint").pixels[..., 3].max()), 0.0)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_42_clipboard_perception_and_object_layer_tools(self) -> None:
+        """Exercise clipboard actions, shadow creation, and deterministic perception helpers."""
+        case_name = "test_42_clipboard_perception_and_object_layer_tools"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 80, 80),
+            create_layer("action_002", "layer_source", "source", color="#00000000"),
+            action("action_003", "draw_shape", params={"shape": rectangle([18, 18, 58, 58]), "fill": {"color": "#8844ff"}, "stroke": None}, target={"layer_id": "layer_source"}, write_mask_id="mask_full_canvas"),
+            select_rect("action_004", "mask_region", [20, 20, 56, 56], name="region"),
+            action("action_005", "copy", params={"source_mask_id": "mask_region"}, target={"layer_id": "layer_source"}),
+            action("action_006", "paste", params={"x": 4, "y": 4, "name": "pasted"}, target={"output_layer_id": "layer_paste"}),
+            action("action_007", "cut", params={"source_mask_id": "mask_region"}, target={"layer_id": "layer_source"}),
+            action("action_008", "duplicate_region_to_layer", params={"source_mask_id": "mask_region", "x": 40, "y": 4, "name": "duplicate"}, target={"layer_id": "layer_paste", "output_layer_id": "layer_duplicate"}),
+            action("action_009", "drop_shadow", params={"offset": [3, 4], "blur_radius": 1.0, "color": "#00000080"}, target={"layer_id": "layer_duplicate", "output_layer_id": "layer_shadow"}),
+            action("action_010", "detect_shape", params={"alpha_min": 0.01}, target={"layer_id": "layer_paste"}),
+            action("action_011", "detect_objects", params={"alpha_min": 0.01, "min_area": 4}, target={"layer_id": "layer_paste"}),
+            action("action_012", "segment_object", params={"mode": "alpha", "name": "object"}, target={"layer_id": "layer_paste", "mask_id": "mask_object"}),
+            action("action_013", "estimate_depth", params={"mode": "luminance", "name": "depth"}, target={"layer_id": "layer_paste", "mask_id": "mask_depth"}),
+            action("action_014", "extract_line_art", params={"threshold": 0.01, "name": "lines"}, target={"layer_id": "layer_paste", "mask_id": "mask_lines"}),
+            action("action_015", "decompose_to_layers", params={"alpha_min": 0.01, "min_area": 4, "output_layer_name": "component"}, target={"layer_id": "layer_paste", "output_layer_id": "layer_component"}),
+            export_flat("action_016", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 80, 80, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertIn("mask_object", doc.masks)
+        self.assertTrue(any(layer.id.startswith("layer_component_") for layer in doc.layers))
+        self.assertIn("observations", doc.annotations)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_43_diffusion_backend_bridge_actions(self) -> None:
+        """Exercise diffusion bridge actions with a deterministic fake backend."""
+
+        class FakeBackend:
+            def _pixels(self, color: list[float]) -> dict[str, Any]:
+                pixels = np.zeros((16, 16, 4), dtype=np.float32)
+                pixels[..., :] = color
+                return {"pixels": pixels, "assets": {"fake": True}}
+
+            def txt2img(self, job: dict[str, Any]) -> dict[str, Any]:
+                return self._pixels([1.0, 0.0, 0.0, 1.0])
+
+            def img2img(self, job: dict[str, Any]) -> dict[str, Any]:
+                return self._pixels([0.0, 1.0, 0.0, 1.0])
+
+            def inpaint(self, job: dict[str, Any]) -> dict[str, Any]:
+                return self._pixels([0.0, 0.0, 1.0, 1.0])
+
+        document = DocumentState(id="doc_diffusion_bridge", canvas=CanvasSpec(width=16, height=16))
+        batch = ActionBatch.from_json(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "id": "batch_diffusion_bridge",
+                "actions": [
+                    full_canvas_mask("action_001", "mask_full_canvas", 16, 16),
+                    create_layer("action_002", "layer_base", "base", color="#00000000"),
+                    action("action_003", "txt2img_to_layer", params={"prompt": "red"}, target={"output_layer_id": "layer_txt"}),
+                    action("action_004", "img2img_to_layer", params={"prompt": "green"}, target={"layer_id": "layer_txt", "output_layer_id": "layer_img"}),
+                    action("action_005", "inpaint_region", params={"prompt": "blue"}, target={"layer_id": "layer_base", "output_layer_id": "layer_inpaint"}, write_mask_id="mask_full_canvas"),
+                    action("action_006", "outpaint_region", params={"prompt": "blue"}, target={"layer_id": "layer_base", "output_layer_id": "layer_outpaint"}, write_mask_id="mask_full_canvas"),
+                ],
+            }
+        )
+        executor = Executor(ExecutionContext(diffusion_backend=FakeBackend()))
+        results = [executor.execute_action(document, item) for item in batch.actions]
+
+        self.assert_all_succeeded(results)
+        self.assertIn("layer_txt", [layer.id for layer in document.layers])
+        self.assertIn("layer_img", [layer.id for layer in document.layers])
+        self.assertGreater(float(document.get_layer("layer_base").pixels[..., 2].mean()), 0.9)
+
+    def test_44_new_document_and_layered_bundle_export(self) -> None:
+        """Reset a document in place and export a complete layered directory bundle."""
+        case_name = "test_44_new_document_and_layered_bundle_export"
+        bundle_path = self.export_path(case_name, "bundle")
+        actions = [
+            action(
+                "action_001",
+                "new_document",
+                params={
+                    "width": 40,
+                    "height": 30,
+                    "color_space": "srgb",
+                    "background_color": "#00000000",
+                    "title": "Bundle fixture",
+                    "tags": ["test", "bundle"],
+                    "custom_metadata": {"purpose": "regression"},
+                },
+                target={"document_id": "doc_new_bundle"},
+                preconditions={"require_write_mask": False},
+            ),
+            full_canvas_mask("action_002", "mask_full_canvas", 40, 30),
+            create_layer("action_003", "layer_box", "box", color="#00000000"),
+            action(
+                "action_004",
+                "draw_shape",
+                params={"shape": rectangle([8, 6, 32, 24]), "fill": {"color": "#3366ff"}, "stroke": None},
+                target={"layer_id": "layer_box"},
+                write_mask_id="mask_full_canvas",
+            ),
+            action(
+                "action_005",
+                "export_layered_bundle",
+                params={"path": str(bundle_path), "include_preview": True, "include_hidden": True, "overwrite": True},
+                preconditions={"require_write_mask": False},
+            ),
+        ]
+        doc, results, summary = self.run_case(case_name, 8, 8, actions)
+
+        self.assert_all_succeeded(results)
+        self.assertEqual(doc.id, "doc_new_bundle")
+        self.assertEqual((doc.canvas.width, doc.canvas.height), (40, 30))
+        self.assertEqual(doc.metadata.title, "Bundle fixture")
+        self.assertEqual(results[-1].before_revision, results[-1].after_revision)
+        manifest = read_json(bundle_path / "manifest.json")
+        snapshot = read_json(bundle_path / "document_snapshot.json")
+        self.assertEqual(manifest["schema_version"], "ai_edit_layered_bundle.v1")
+        self.assertEqual(manifest["document_id"], "doc_new_bundle")
+        self.assertEqual(snapshot["canvas"]["width"], 40)
+        self.assertTrue((bundle_path / "preview.png").exists())
+        self.assertTrue((bundle_path / manifest["layers"][0]["pixels"]["path"]).exists())
+        self.assertTrue((bundle_path / manifest["masks"][0]["data"]["path"]).exists())
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_45_planner_catalog_covers_every_action(self) -> None:
+        """Expose a machine-readable planner schema for every action type."""
+        specs = available_action_specs()
+        names = {item["name"] for item in specs}
+        self.assertEqual(names, {item.value for item in ActionType})
+        self.assertEqual(planner_output_schema()["schema_version"], "ai_edit_planner_output.v1")
+
+        draw_shape_spec = next(item for item in specs if item["name"] == "draw_shape")
+        self.assertEqual(draw_shape_spec["write_mask"], "generated")
+        self.assertIn("shape", draw_shape_spec["planner_schema"]["properties"]["params"]["properties"])
+        self.assertIn("kernel_filled_fields", draw_shape_spec)
+
+    def test_46_ai_planner_normalizes_executes_and_traces_minimal_output(self) -> None:
+        """Turn LLM-light planner output into executable actions and trace it."""
+        case_name = "test_46_ai_planner_normalizes_executes_and_traces_minimal_output"
+        test_dir = ARTIFACT_ROOT / case_name
+        traces_dir = test_dir / "traces"
+        export_path = self.export_path(case_name, "final.png")
+        traces_dir.mkdir(parents=True, exist_ok=True)
+
+        document = DocumentState(id=f"doc_{case_name}", canvas=CanvasSpec(width=32, height=32))
+        logger = TraceLogger(
+            traces_dir,
+            metadata={
+                "task_type": "planner_integration",
+                "source": "planner_unittest",
+                "split": "test",
+            },
+        )
+        prompt = "Create a red circle on a transparent layer."
+        logger.start_session(prompt)
+        logger.log_document_snapshot(document, "initial")
+
+        backend = StaticPlannerBackend(
+            [
+                {
+                    "schema_version": "ai_edit_planner_output.v1",
+                    "description": "Create a layer and draw a red circle.",
+                    "actions": [
+                        {
+                            "type": "create_layer",
+                            "target": {"output_layer_id": "layer_ai_circle"},
+                            "params": {"name": "AI circle", "color": "#00000000"},
+                        },
+                        {
+                            "type": "draw_shape",
+                            "target": {"layer_id": "layer_ai_circle"},
+                            "params": {
+                                "shape": ellipse([8, 8, 24, 24]),
+                                "fill": {"color": "#ff0000"},
+                            },
+                        },
+                        {
+                            "type": "export_flat",
+                            "params": {"path": str(export_path)},
+                        },
+                    ],
+                }
+            ]
+        )
+        planner = AIPlanner(backend=backend, trace_sink=logger)
+        executor = Executor(ExecutionContext(trace_sink=logger))
+        execution = planner.plan_and_execute(prompt, document, executor)
+        logger.log_document_snapshot(document, "final")
+        session = logger.end_session()
+
+        self.assertTrue(execution.succeeded())
+        batch = execution.planner_result.action_batch
+        self.assertEqual([item.type.value for item in batch.actions], ["create_layer", "create_mask_from_shape", "draw_shape", "export_flat"])
+        self.assertEqual(batch.actions[2].write_mask_id, "mask_full_canvas")
+        self.assertTrue(export_path.exists())
+        self.assert_color_close(document.flatten_preview()[16, 16], [1.0, 0.0, 0.0, 1.0])
+
+        events = read_jsonl(traces_dir / session.id / "events.jsonl")
+        event_types = [event["type"] for event in events]
+        self.assertIn("planner_input", event_types)
+        self.assertIn("planner_output_raw", event_types)
+        self.assertIn("action_batch_planned", event_types)
+
+    def test_47_ai_planner_retries_invalid_schema_output(self) -> None:
+        """Feed normalization errors back into the next planner request."""
+        document = DocumentState(id="doc_planner_retry", canvas=CanvasSpec(width=16, height=16))
+        backend = StaticPlannerBackend(
+            [
+                {"schema_version": "ai_edit_planner_output.v1", "actions": [{"type": "draw_shape", "params": {}}]},
+                {"schema_version": "ai_edit_planner_output.v1", "actions": [{"type": "no_op"}]},
+            ]
+        )
+        planner = AIPlanner(backend=backend, options=PlannerOptions(max_schema_retries=1))
+        result = planner.plan("Do nothing after repairing the invalid first response.", document)
+
+        self.assertEqual(backend.index, 2)
+        self.assertEqual(result.action_batch.actions[0].type, ActionType.NO_OP)
+        self.assertEqual(result.metadata["schema_retry_count"], 1)
+        self.assertIn("previous_errors", result.request)
+        self.assertEqual(len(result.request["previous_errors"]), 1)
 
     def run_case(
         self,

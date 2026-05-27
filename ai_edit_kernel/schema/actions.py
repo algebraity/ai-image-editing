@@ -61,11 +61,19 @@ class ActionType(str, Enum):
     SET_LAYER_OPACITY = "set_layer_opacity"
     SET_BLEND_MODE = "set_blend_mode"
     MERGE_LAYERS = "merge_layers"
+    MOVE_LAYER = "move_layer"
+    SCALE_LAYER = "scale_layer"
+    ROTATE_LAYER = "rotate_layer"
+    FLIP_LAYER = "flip_layer"
+    ADD_LAYER_MASK = "add_layer_mask"
+    APPLY_LAYER_MASK = "apply_layer_mask"
+    REMOVE_LAYER_MASK = "remove_layer_mask"
 
     # Selection and mask actions
     SELECT_RECT = "select_rect"
     SELECT_ELLIPSE = "select_ellipse"
     SELECT_POLYGON = "select_polygon"
+    SELECT_FREEHAND = "select_freehand"
     SELECT_FROM_ALPHA = "select_from_alpha"
     SELECT_COLOR_RANGE = "select_color_range"
     MAGIC_WAND_SELECT = "magic_wand_select"
@@ -76,24 +84,49 @@ class ActionType(str, Enum):
     FEATHER_MASK = "feather_mask"
     INVERT_MASK = "invert_mask"
     COMBINE_MASKS = "combine_masks"
+    REFINE_SELECTION = "refine_selection"
+    REMOVE_SMALL_ISLANDS = "remove_small_islands"
+    FILL_MASK_HOLES = "fill_mask_holes"
 
     # Drawing and pixel actions
     DRAW_SHAPE = "draw_shape"
     DRAW_PATH = "draw_path"
     BRUSH_STROKE = "brush_stroke"
+    ERASE_STROKE = "erase_stroke"
     PAINT_BUCKET_FILL = "paint_bucket_fill"
     GRADIENT_FILL = "gradient_fill"
+    PATTERN_FILL = "pattern_fill"
     BLUR_REGION = "blur_region"
+    SHARPEN_REGION = "sharpen_region"
+    NOISE_REDUCE = "noise_reduce"
+    MEDIAN_FILTER = "median_filter"
+    EDGE_DETECT = "edge_detect"
+    DROP_SHADOW = "drop_shadow"
+    STROKE_SELECTION = "stroke_selection"
     CLEAR_REGION = "clear_region"
     CUT = "cut"
     COPY = "copy"
     PASTE = "paste"
+    PASTE_AS_NEW_LAYER = "paste_as_new_layer"
+    DUPLICATE_REGION_TO_LAYER = "duplicate_region_to_layer"
     TRANSFORM_LAYER = "transform_layer"
     ALIGN_LAYER = "align_layer"
+    ADJUST_BRIGHTNESS_CONTRAST = "adjust_brightness_contrast"
+    ADJUST_HUE_SATURATION = "adjust_hue_saturation"
+    ADJUST_LEVELS = "adjust_levels"
+    ADJUST_CURVES = "adjust_curves"
+    COLORIZE = "colorize"
+    REPLACE_COLOR = "replace_color"
+    DESATURATE = "desaturate"
+    CREATE_TEXT_LAYER = "create_text_layer"
+    EDIT_TEXT_LAYER = "edit_text_layer"
+    RASTERIZE_TEXT_LAYER = "rasterize_text_layer"
 
     # Perception actions
     DETECT_SHAPE = "detect_shape"
     DETECT_OBJECTS = "detect_objects"
+    SEGMENT_OBJECT = "segment_object"
+    ESTIMATE_DEPTH = "estimate_depth"
     EXTRACT_LINE_ART = "extract_line_art"
     DECOMPOSE_TO_LAYERS = "decompose_to_layers"
 
@@ -338,9 +371,26 @@ class Action:
         """Return whether this action can modify existing pixel or alpha data."""
         return self.type in {
             ActionType.DRAW_SHAPE,
+            ActionType.DRAW_PATH,
+            ActionType.BRUSH_STROKE,
+            ActionType.ERASE_STROKE,
             ActionType.PAINT_BUCKET_FILL,
+            ActionType.GRADIENT_FILL,
+            ActionType.PATTERN_FILL,
             ActionType.BLUR_REGION,
+            ActionType.SHARPEN_REGION,
+            ActionType.NOISE_REDUCE,
+            ActionType.MEDIAN_FILTER,
+            ActionType.EDGE_DETECT,
+            ActionType.STROKE_SELECTION,
             ActionType.CLEAR_REGION,
+            ActionType.ADJUST_BRIGHTNESS_CONTRAST,
+            ActionType.ADJUST_HUE_SATURATION,
+            ActionType.ADJUST_LEVELS,
+            ActionType.ADJUST_CURVES,
+            ActionType.COLORIZE,
+            ActionType.REPLACE_COLOR,
+            ActionType.DESATURATE,
         }
 
     def to_json(self) -> JsonObject:
@@ -608,6 +658,29 @@ def _validate_create_layer(action: Action) -> None:
         _validate_color(action.params["color"], "params.color")
     if "color_rgba" in action.params:
         _rgba_sequence(action.params["color_rgba"], "params.color_rgba")
+
+
+def _validate_new_document(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {"width", "height", "color_space", "background_color", "dpi", "title", "author", "source_file", "tags", "custom_metadata"},
+    )
+    _positive_int(action.params.get("width"), "params.width")
+    _positive_int(action.params.get("height"), "params.height")
+    if "color_space" in action.params:
+        _optional_enum_string(action.params["color_space"], {"srgb", "linear_rgb", "display_p3"}, "params.color_space")
+    if "background_color" in action.params:
+        _validate_color(action.params["background_color"], "params.background_color")
+    if action.params.get("dpi") is not None:
+        _positive_number(action.params["dpi"], "params.dpi")
+    for key in ("title", "author", "source_file"):
+        if key in action.params:
+            _optional_string(action.params[key], f"params.{key}")
+    if "tags" in action.params:
+        _string_list(action.params["tags"], "params.tags")
+    if "custom_metadata" in action.params:
+        _mapping_value(action.params["custom_metadata"], "params.custom_metadata")
 
 
 def _validate_resize_canvas(action: Action) -> None:
@@ -939,16 +1012,446 @@ def _validate_clear_region(action: Action) -> None:
     _bool_value(action.params.get("preserve_rgb", False), "params.preserve_rgb")
 
 
+def _validate_transform_layer(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {
+            "operation",
+            "dx",
+            "dy",
+            "scale_x",
+            "scale_y",
+            "angle_degrees",
+            "horizontal",
+            "vertical",
+            "anchor",
+            "matrix",
+            "resample",
+            "fill_color",
+        },
+    )
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    operation = action.params.get("operation", "affine")
+    if operation not in {"translate", "scale", "rotate", "flip", "affine"}:
+        raise ValueError("params.operation must be 'translate', 'scale', 'rotate', 'flip', or 'affine'")
+    for key in ("dx", "dy", "scale_x", "scale_y", "angle_degrees"):
+        if key in action.params:
+            _number(action.params[key], f"params.{key}")
+    if "horizontal" in action.params:
+        _bool_value(action.params["horizontal"], "params.horizontal")
+    if "vertical" in action.params:
+        _bool_value(action.params["vertical"], "params.vertical")
+    if "anchor" in action.params:
+        _point(action.params["anchor"], "params.anchor")
+    if "matrix" in action.params:
+        _number_list(action.params["matrix"], "params.matrix", length=6)
+    if "resample" in action.params:
+        _optional_enum_string(action.params["resample"], {"nearest", "bilinear", "bicubic"}, "params.resample")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_move_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"dx", "dy", "resample", "fill_color"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _number(action.params.get("dx", 0.0), "params.dx")
+    _number(action.params.get("dy", 0.0), "params.dy")
+    if "resample" in action.params:
+        _optional_enum_string(action.params["resample"], {"nearest", "bilinear", "bicubic"}, "params.resample")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_scale_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"scale_x", "scale_y", "anchor", "resample", "fill_color"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _positive_number(action.params.get("scale_x", 1.0), "params.scale_x")
+    _positive_number(action.params.get("scale_y", action.params.get("scale_x", 1.0)), "params.scale_y")
+    if "anchor" in action.params:
+        _point(action.params["anchor"], "params.anchor")
+    if "resample" in action.params:
+        _optional_enum_string(action.params["resample"], {"nearest", "bilinear", "bicubic"}, "params.resample")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_rotate_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"angle_degrees", "anchor", "resample", "fill_color"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _number(action.params.get("angle_degrees"), "params.angle_degrees")
+    if "anchor" in action.params:
+        _point(action.params["anchor"], "params.anchor")
+    if "resample" in action.params:
+        _optional_enum_string(action.params["resample"], {"nearest", "bilinear", "bicubic"}, "params.resample")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_flip_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"horizontal", "vertical", "anchor", "resample", "fill_color"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _bool_value(action.params.get("horizontal", True), "params.horizontal")
+    _bool_value(action.params.get("vertical", False), "params.vertical")
+    if "anchor" in action.params:
+        _point(action.params["anchor"], "params.anchor")
+    if "resample" in action.params:
+        _optional_enum_string(action.params["resample"], {"nearest", "bilinear", "bicubic"}, "params.resample")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_align_layer(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"horizontal", "vertical", "margin", "fill_color"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    if "horizontal" in action.params:
+        _optional_enum_string(action.params["horizontal"], {"left", "center", "right", "none"}, "params.horizontal")
+    if "vertical" in action.params:
+        _optional_enum_string(action.params["vertical"], {"top", "center", "bottom", "none"}, "params.vertical")
+    _nonnegative_int(action.params.get("margin", 0), "params.margin")
+    if "fill_color" in action.params:
+        _validate_color(action.params["fill_color"], "params.fill_color")
+
+
+def _validate_layer_mask_action(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"mode", "source_mask_id", "name", "remove_mask", "invert"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    if action.type == ActionType.ADD_LAYER_MASK:
+        _require_target_id(action.target.mask_id, "target.mask_id")
+        mode = action.params.get("mode", "from_selection")
+        if mode not in {"from_selection", "from_alpha", "full", "empty", "from_mask"}:
+            raise ValueError("params.mode must be 'from_selection', 'from_alpha', 'full', 'empty', or 'from_mask'")
+        if mode == "from_mask":
+            _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    if "remove_mask" in action.params:
+        _bool_value(action.params["remove_mask"], "params.remove_mask")
+    if "invert" in action.params:
+        _bool_value(action.params["invert"], "params.invert")
+
+
+def _validate_select_polygon(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"name", "points", "closed", "kind", "set_active"})
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _point_list(action.params.get("points"), "params.points")
+    _bool_value(action.params.get("closed", True), "params.closed")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    if "kind" in action.params:
+        _optional_enum_string(
+            action.params["kind"],
+            {"selection", "write_guard", "layer_alpha", "object", "shape", "line_art_region", "diffusion"},
+            "params.kind",
+        )
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_select_from_alpha(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"name", "threshold", "kind", "set_active"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _optional_unit_number(action.params.get("threshold", 0.01), "params.threshold")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    if "kind" in action.params:
+        _optional_enum_string(
+            action.params["kind"],
+            {"selection", "write_guard", "layer_alpha", "object", "shape", "line_art_region", "diffusion"},
+            "params.kind",
+        )
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_save_selection_as_mask(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"source_mask_id", "name", "kind", "set_active"})
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    if "source_mask_id" in action.params:
+        _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    if "kind" in action.params:
+        _optional_enum_string(
+            action.params["kind"],
+            {"selection", "write_guard", "layer_alpha", "object", "shape", "line_art_region", "diffusion"},
+            "params.kind",
+        )
+    _bool_value(action.params.get("set_active", False), "params.set_active")
+
+
+def _validate_mask_cleanup(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {"source_mask_id", "name", "threshold", "feather_radius", "grow_pixels", "shrink_pixels", "min_area", "set_active"},
+    )
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "threshold" in action.params:
+        _optional_unit_number(action.params["threshold"], "params.threshold")
+    if "feather_radius" in action.params:
+        _nonnegative_number(action.params["feather_radius"], "params.feather_radius")
+    if "grow_pixels" in action.params:
+        _nonnegative_int(action.params["grow_pixels"], "params.grow_pixels")
+    if "shrink_pixels" in action.params:
+        _nonnegative_int(action.params["shrink_pixels"], "params.shrink_pixels")
+    if "min_area" in action.params:
+        _nonnegative_int(action.params["min_area"], "params.min_area")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _bool_value(action.params.get("set_active", False), "params.set_active")
+
+
+def _validate_path_paint(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {"points", "color", "width", "opacity", "mode", "hardness", "spacing", "closed"},
+    )
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _point_list(action.params.get("points"), "params.points")
+    if action.type != ActionType.ERASE_STROKE:
+        _validate_color(action.params.get("color"), "params.color")
+    _positive_number(action.params.get("width", 1.0), "params.width")
+    _optional_unit_number(action.params.get("opacity", 1.0), "params.opacity")
+    if "mode" in action.params:
+        _optional_enum_string(action.params["mode"], {"source_over", "replace_rgba", "alpha_to_zero"}, "params.mode")
+    if "hardness" in action.params:
+        _optional_unit_number(action.params["hardness"], "params.hardness")
+    if "spacing" in action.params:
+        _positive_number(action.params["spacing"], "params.spacing")
+    if "closed" in action.params:
+        _bool_value(action.params["closed"], "params.closed")
+
+
+def _validate_gradient_fill(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"type", "start", "end", "center", "radius", "colors", "mode"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    gradient_type = action.params.get("type", "linear")
+    if gradient_type not in {"linear", "radial"}:
+        raise ValueError("params.type must be 'linear' or 'radial'")
+    if gradient_type == "linear":
+        _point(action.params.get("start"), "params.start")
+        _point(action.params.get("end"), "params.end")
+    else:
+        _point(action.params.get("center"), "params.center")
+        _positive_number(action.params.get("radius"), "params.radius")
+    colors = action.params.get("colors")
+    if not isinstance(colors, list) or len(colors) < 2:
+        raise TypeError("params.colors must be a list of at least two colors")
+    for index, item in enumerate(colors):
+        _validate_color(item, f"params.colors[{index}]")
+    if "mode" in action.params:
+        _optional_enum_string(action.params["mode"], {"replace_rgb_preserve_alpha", "replace_rgba", "source_over"}, "params.mode")
+
+
+def _validate_pattern_fill(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"pattern", "colors", "cell_size", "stripe_width", "angle_degrees", "mode", "path"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    pattern = action.params.get("pattern", "checkerboard")
+    if pattern not in {"checkerboard", "stripes", "image"}:
+        raise ValueError("params.pattern must be 'checkerboard', 'stripes', or 'image'")
+    if pattern == "image":
+        _required_string(action.params, "path", "params.path")
+    colors = action.params.get("colors", ["#000000", "#ffffff"])
+    if not isinstance(colors, list) or len(colors) < 1:
+        raise TypeError("params.colors must be a non-empty list")
+    for index, item in enumerate(colors):
+        _validate_color(item, f"params.colors[{index}]")
+    _positive_int(action.params.get("cell_size", 16), "params.cell_size")
+    _positive_int(action.params.get("stripe_width", action.params.get("cell_size", 16)), "params.stripe_width")
+    if "angle_degrees" in action.params:
+        _number(action.params["angle_degrees"], "params.angle_degrees")
+    if "mode" in action.params:
+        _optional_enum_string(action.params["mode"], {"replace_rgb_preserve_alpha", "replace_rgba", "source_over"}, "params.mode")
+
+
+def _validate_color_adjustment(action: Action) -> None:
+    allowed = {
+        "brightness",
+        "contrast",
+        "hue_degrees",
+        "saturation",
+        "lightness",
+        "gamma",
+        "in_black",
+        "in_white",
+        "out_black",
+        "out_white",
+        "points",
+        "color",
+        "source_color",
+        "target_color",
+        "tolerance",
+        "softness",
+        "method",
+        "amount",
+    }
+    _reject_unknown_keys(action.params, "params", allowed)
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    for key in ("brightness", "contrast", "hue_degrees", "saturation", "lightness", "gamma", "in_black", "in_white", "out_black", "out_white", "tolerance", "softness", "amount"):
+        if key in action.params:
+            _number(action.params[key], f"params.{key}")
+    for key in ("color", "source_color", "target_color"):
+        if key in action.params:
+            _validate_color(action.params[key], f"params.{key}")
+    if action.type == ActionType.ADJUST_CURVES:
+        points = action.params.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            raise TypeError("params.points must be a list of at least two [input, output] points")
+        for index, point in enumerate(points):
+            _point(point, f"params.points[{index}]")
+    if "method" in action.params:
+        _optional_enum_string(action.params["method"], {"luminance", "average", "lightness"}, "params.method")
+
+
+def _validate_filter_action(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"radius", "amount", "threshold", "channels", "mode", "color", "offset", "blur_radius", "opacity", "source_mask_id", "output_layer_name"})
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    for key in ("radius", "amount", "threshold", "blur_radius", "opacity"):
+        if key in action.params:
+            _nonnegative_number(action.params[key], f"params.{key}")
+    if "channels" in action.params:
+        _validate_channels(action.params["channels"], "params.channels")
+    if "mode" in action.params:
+        _optional_enum_string(action.params["mode"], {"replace_rgb_preserve_alpha", "replace_rgba", "source_over", "alpha", "luminance"}, "params.mode")
+    if "color" in action.params:
+        _validate_color(action.params["color"], "params.color")
+    if "offset" in action.params:
+        _point(action.params["offset"], "params.offset")
+    if "source_mask_id" in action.params:
+        _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "output_layer_name" in action.params:
+        _optional_string(action.params["output_layer_name"], "params.output_layer_name")
+
+
+def _validate_cut_copy_paste(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"source_mask_id", "bbox_xyxy", "x", "y", "name", "clear_mode", "preserve_rgb", "set_active"})
+    if action.type in {ActionType.CUT, ActionType.COPY, ActionType.DUPLICATE_REGION_TO_LAYER}:
+        _require_target_id(action.target.layer_id, "target.layer_id")
+    if action.type in {ActionType.PASTE, ActionType.PASTE_AS_NEW_LAYER, ActionType.DUPLICATE_REGION_TO_LAYER}:
+        _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    if "source_mask_id" in action.params:
+        _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "bbox_xyxy" in action.params:
+        _bbox_xyxy(action.params["bbox_xyxy"], "params.bbox_xyxy")
+    if "x" in action.params:
+        _integer_number(action.params["x"], "params.x")
+    if "y" in action.params:
+        _integer_number(action.params["y"], "params.y")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    if "clear_mode" in action.params:
+        _optional_enum_string(action.params["clear_mode"], {"alpha_to_zero", "rgba_to_zero"}, "params.clear_mode")
+    if "preserve_rgb" in action.params:
+        _bool_value(action.params["preserve_rgb"], "params.preserve_rgb")
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_text_action(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {"text", "name", "x", "y", "font_path", "font_size", "color", "anchor", "align", "spacing", "set_active"},
+    )
+    if action.type == ActionType.CREATE_TEXT_LAYER:
+        _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    else:
+        _require_target_id(action.target.layer_id, "target.layer_id")
+    if action.type != ActionType.RASTERIZE_TEXT_LAYER:
+        _required_string(action.params, "text", "params.text")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _integer_number(action.params.get("x", 0), "params.x")
+    _integer_number(action.params.get("y", 0), "params.y")
+    if "font_path" in action.params:
+        _optional_string(action.params["font_path"], "params.font_path")
+    _positive_int(action.params.get("font_size", 32), "params.font_size")
+    if "color" in action.params:
+        _validate_color(action.params["color"], "params.color")
+    if "anchor" in action.params:
+        _optional_string(action.params["anchor"], "params.anchor")
+    if "align" in action.params:
+        _optional_enum_string(action.params["align"], {"left", "center", "right"}, "params.align")
+    _nonnegative_int(action.params.get("spacing", 0), "params.spacing")
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_perception_action(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"threshold", "alpha_min", "tolerance", "seed_points", "mode", "name", "set_active", "output_layer_name", "min_area", "max_objects"})
+    if action.type in {ActionType.DETECT_SHAPE, ActionType.DETECT_OBJECTS, ActionType.SEGMENT_OBJECT, ActionType.ESTIMATE_DEPTH, ActionType.EXTRACT_LINE_ART, ActionType.DECOMPOSE_TO_LAYERS}:
+        _require_target_id(action.target.layer_id, "target.layer_id")
+    if action.type in {ActionType.SEGMENT_OBJECT, ActionType.ESTIMATE_DEPTH, ActionType.EXTRACT_LINE_ART}:
+        _require_target_id(action.target.mask_id, "target.mask_id")
+    if action.type == ActionType.DECOMPOSE_TO_LAYERS:
+        _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    for key in ("threshold", "alpha_min", "tolerance"):
+        if key in action.params:
+            _optional_unit_number(action.params[key], f"params.{key}")
+    if "seed_points" in action.params:
+        _point_list(action.params["seed_points"], "params.seed_points")
+    if "mode" in action.params:
+        _optional_enum_string(action.params["mode"], {"alpha", "luminance", "color", "edges"}, "params.mode")
+    if "min_area" in action.params:
+        _nonnegative_int(action.params["min_area"], "params.min_area")
+    if "max_objects" in action.params:
+        _positive_int(action.params["max_objects"], "params.max_objects")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    if "output_layer_name" in action.params:
+        _optional_string(action.params["output_layer_name"], "params.output_layer_name")
+    _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_diffusion_action(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"prompt", "negative_prompt", "seed", "denoise", "backend", "job", "output_layer_name", "mode"})
+    if action.type in {ActionType.INPAINT_REGION, ActionType.OUTPAINT_REGION, ActionType.IMG2IMG_TO_LAYER}:
+        _require_target_id(action.target.layer_id, "target.layer_id")
+    if action.type in {ActionType.TXT2IMG_TO_LAYER, ActionType.IMG2IMG_TO_LAYER, ActionType.INPAINT_REGION, ActionType.OUTPAINT_REGION}:
+        _require_target_id(action.target.output_layer_id, "target.output_layer_id")
+    if action.type in {ActionType.INPAINT_REGION, ActionType.OUTPAINT_REGION} and action.write_mask_id is None:
+        raise ValueError("diffusion region actions require write_mask_id")
+    if "prompt" in action.params:
+        _optional_string(action.params["prompt"], "params.prompt")
+    if "negative_prompt" in action.params:
+        _optional_string(action.params["negative_prompt"], "params.negative_prompt")
+    if "seed" in action.params and action.params["seed"] is not None:
+        _integer_number(action.params["seed"], "params.seed")
+    if "denoise" in action.params:
+        _optional_unit_number(action.params["denoise"], "params.denoise")
+    if "backend" in action.params:
+        _optional_string(action.params["backend"], "params.backend")
+    if "job" in action.params:
+        _mapping_value(action.params["job"], "params.job")
+    if "output_layer_name" in action.params:
+        _optional_string(action.params["output_layer_name"], "params.output_layer_name")
+    if "mode" in action.params:
+        _optional_enum_string(action.params["mode"], {"replace_region", "new_layer"}, "params.mode")
+
+
 def _validate_export_flat(action: Action) -> None:
     _reject_unknown_keys(action.params, "params", {"path"})
     _required_string(action.params, "path", "params.path")
+
+
+def _validate_export_layered_bundle(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", {"path", "include_preview", "include_hidden", "overwrite"})
+    _required_string(action.params, "path", "params.path")
+    _bool_value(action.params.get("include_preview", True), "params.include_preview")
+    _bool_value(action.params.get("include_hidden", True), "params.include_hidden")
+    _bool_value(action.params.get("overwrite", True), "params.overwrite")
 
 
 def _validate_no_op(action: Action) -> None:
     _reject_unknown_keys(action.params, "params", set())
 
 
+def _validate_validate(action: Action) -> None:
+    _reject_unknown_keys(action.params, "params", set())
+
+
 _PARAM_VALIDATORS = {
+    ActionType.NEW_DOCUMENT: _validate_new_document,
     ActionType.RESIZE_CANVAS: _validate_resize_canvas,
     ActionType.CROP: _validate_crop,
     ActionType.IMPORT_IMAGE_AS_LAYER: _validate_import_image_as_layer,
@@ -964,21 +1467,75 @@ _PARAM_VALIDATORS = {
     ActionType.SET_LAYER_OPACITY: _validate_set_layer_opacity,
     ActionType.SET_BLEND_MODE: _validate_set_blend_mode,
     ActionType.MERGE_LAYERS: _validate_merge_layers,
+    ActionType.MOVE_LAYER: _validate_move_layer,
+    ActionType.SCALE_LAYER: _validate_scale_layer,
+    ActionType.ROTATE_LAYER: _validate_rotate_layer,
+    ActionType.FLIP_LAYER: _validate_flip_layer,
+    ActionType.TRANSFORM_LAYER: _validate_transform_layer,
+    ActionType.ALIGN_LAYER: _validate_align_layer,
+    ActionType.ADD_LAYER_MASK: _validate_layer_mask_action,
+    ActionType.APPLY_LAYER_MASK: _validate_layer_mask_action,
+    ActionType.REMOVE_LAYER_MASK: _validate_layer_mask_action,
     ActionType.SELECT_RECT: _validate_select_rect,
     ActionType.SELECT_ELLIPSE: _validate_select_ellipse,
+    ActionType.SELECT_POLYGON: _validate_select_polygon,
+    ActionType.SELECT_FREEHAND: _validate_select_polygon,
+    ActionType.SELECT_FROM_ALPHA: _validate_select_from_alpha,
     ActionType.SELECT_COLOR_RANGE: _validate_select_color_range,
     ActionType.MAGIC_WAND_SELECT: _validate_magic_wand_select,
+    ActionType.SAVE_SELECTION_AS_MASK: _validate_save_selection_as_mask,
     ActionType.CREATE_MASK_FROM_SHAPE: _validate_create_mask_from_shape,
     ActionType.GROW_MASK: _validate_grow_mask,
     ActionType.SHRINK_MASK: _validate_shrink_mask,
     ActionType.INVERT_MASK: _validate_invert_mask,
     ActionType.COMBINE_MASKS: _validate_combine_masks,
     ActionType.FEATHER_MASK: _validate_feather_mask,
+    ActionType.REFINE_SELECTION: _validate_mask_cleanup,
+    ActionType.REMOVE_SMALL_ISLANDS: _validate_mask_cleanup,
+    ActionType.FILL_MASK_HOLES: _validate_mask_cleanup,
     ActionType.DRAW_SHAPE: _validate_draw_shape,
+    ActionType.DRAW_PATH: _validate_path_paint,
+    ActionType.BRUSH_STROKE: _validate_path_paint,
+    ActionType.ERASE_STROKE: _validate_path_paint,
     ActionType.PAINT_BUCKET_FILL: _validate_paint_bucket_fill,
+    ActionType.GRADIENT_FILL: _validate_gradient_fill,
+    ActionType.PATTERN_FILL: _validate_pattern_fill,
     ActionType.BLUR_REGION: _validate_blur_region,
+    ActionType.SHARPEN_REGION: _validate_filter_action,
+    ActionType.NOISE_REDUCE: _validate_filter_action,
+    ActionType.MEDIAN_FILTER: _validate_filter_action,
+    ActionType.EDGE_DETECT: _validate_filter_action,
+    ActionType.DROP_SHADOW: _validate_filter_action,
+    ActionType.STROKE_SELECTION: _validate_filter_action,
     ActionType.CLEAR_REGION: _validate_clear_region,
+    ActionType.CUT: _validate_cut_copy_paste,
+    ActionType.COPY: _validate_cut_copy_paste,
+    ActionType.PASTE: _validate_cut_copy_paste,
+    ActionType.PASTE_AS_NEW_LAYER: _validate_cut_copy_paste,
+    ActionType.DUPLICATE_REGION_TO_LAYER: _validate_cut_copy_paste,
+    ActionType.ADJUST_BRIGHTNESS_CONTRAST: _validate_color_adjustment,
+    ActionType.ADJUST_HUE_SATURATION: _validate_color_adjustment,
+    ActionType.ADJUST_LEVELS: _validate_color_adjustment,
+    ActionType.ADJUST_CURVES: _validate_color_adjustment,
+    ActionType.COLORIZE: _validate_color_adjustment,
+    ActionType.REPLACE_COLOR: _validate_color_adjustment,
+    ActionType.DESATURATE: _validate_color_adjustment,
+    ActionType.CREATE_TEXT_LAYER: _validate_text_action,
+    ActionType.EDIT_TEXT_LAYER: _validate_text_action,
+    ActionType.RASTERIZE_TEXT_LAYER: _validate_text_action,
+    ActionType.DETECT_SHAPE: _validate_perception_action,
+    ActionType.DETECT_OBJECTS: _validate_perception_action,
+    ActionType.SEGMENT_OBJECT: _validate_perception_action,
+    ActionType.ESTIMATE_DEPTH: _validate_perception_action,
+    ActionType.EXTRACT_LINE_ART: _validate_perception_action,
+    ActionType.DECOMPOSE_TO_LAYERS: _validate_perception_action,
+    ActionType.TXT2IMG_TO_LAYER: _validate_diffusion_action,
+    ActionType.IMG2IMG_TO_LAYER: _validate_diffusion_action,
+    ActionType.INPAINT_REGION: _validate_diffusion_action,
+    ActionType.OUTPAINT_REGION: _validate_diffusion_action,
+    ActionType.VALIDATE: _validate_validate,
     ActionType.EXPORT_FLAT: _validate_export_flat,
+    ActionType.EXPORT_LAYERED_BUNDLE: _validate_export_layered_bundle,
     ActionType.NO_OP: _validate_no_op,
 }
 
@@ -1013,15 +1570,22 @@ def _point_list(value: Any, field_name: str) -> list[tuple[float, float]]:
         raise TypeError(f"{field_name} must be a non-empty list")
     points = []
     for index, item in enumerate(value):
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise TypeError(f"{field_name}[{index}] must be a two-number list")
-        points.append(
-            (
-                _number(item[0], f"{field_name}[{index}].x"),
-                _number(item[1], f"{field_name}[{index}].y"),
-            )
-        )
+        points.append(_point(item, f"{field_name}[{index}]"))
     return points
+
+
+def _point(value: Any, field_name: str) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise TypeError(f"{field_name} must be a two-number list")
+    return (_number(value[0], f"{field_name}.x"), _number(value[1], f"{field_name}.y"))
+
+
+def _number_list(value: Any, field_name: str, length: Optional[int] = None) -> list[float]:
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be a list of numbers")
+    if length is not None and len(value) != length:
+        raise ValueError(f"{field_name} must contain exactly {length} numbers")
+    return [_number(item, f"{field_name} entry") for item in value]
 
 
 def _validate_color(value: Any, field_name: str) -> None:

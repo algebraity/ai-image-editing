@@ -8,6 +8,7 @@ them; trace sinks record what happened.
 from __future__ import annotations
 
 import gzip
+import json
 import re
 import xml.etree.ElementTree as ET
 from collections import deque
@@ -23,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover - exercised only when SciPy is absent
     _ndimage = None
 
-from ai_edit_kernel.document.document_state import CanvasSpec, DocumentState
+from ai_edit_kernel.document.document_state import CanvasSpec, ColorSpace, DocumentMetadata, DocumentState
 from ai_edit_kernel.document.layer import BlendMode, Layer, LayerKind
 from ai_edit_kernel.document.mask import Mask, MaskKind
 from ai_edit_kernel.runtime.validator import ValidationReport, Validator
@@ -176,6 +177,7 @@ class Executor:
     def dispatch(self, document: DocumentState, action: Action) -> ActionResult:
         """Route an action to its implementation method."""
         handlers = {
+            ActionType.NEW_DOCUMENT: self._execute_new_document,
             ActionType.RESIZE_CANVAS: self._execute_resize_canvas,
             ActionType.CROP: self._execute_crop,
             ActionType.IMPORT_IMAGE_AS_LAYER: self._execute_import_image_as_layer,
@@ -191,21 +193,75 @@ class Executor:
             ActionType.SET_LAYER_OPACITY: self._execute_set_layer_opacity,
             ActionType.SET_BLEND_MODE: self._execute_set_blend_mode,
             ActionType.MERGE_LAYERS: self._execute_merge_layers,
+            ActionType.MOVE_LAYER: self._execute_move_layer,
+            ActionType.SCALE_LAYER: self._execute_scale_layer,
+            ActionType.ROTATE_LAYER: self._execute_rotate_layer,
+            ActionType.FLIP_LAYER: self._execute_flip_layer,
+            ActionType.TRANSFORM_LAYER: self._execute_transform_layer,
+            ActionType.ALIGN_LAYER: self._execute_align_layer,
+            ActionType.ADD_LAYER_MASK: self._execute_add_layer_mask,
+            ActionType.APPLY_LAYER_MASK: self._execute_apply_layer_mask,
+            ActionType.REMOVE_LAYER_MASK: self._execute_remove_layer_mask,
             ActionType.SELECT_RECT: self._execute_select_rect,
             ActionType.SELECT_ELLIPSE: self._execute_select_ellipse,
+            ActionType.SELECT_POLYGON: self._execute_select_polygon,
+            ActionType.SELECT_FREEHAND: self._execute_select_polygon,
+            ActionType.SELECT_FROM_ALPHA: self._execute_select_from_alpha,
             ActionType.SELECT_COLOR_RANGE: self._execute_select_color_range,
             ActionType.MAGIC_WAND_SELECT: self._execute_magic_wand_select,
+            ActionType.SAVE_SELECTION_AS_MASK: self._execute_save_selection_as_mask,
             ActionType.CREATE_MASK_FROM_SHAPE: self._execute_create_mask_from_shape,
             ActionType.GROW_MASK: self._execute_grow_mask,
             ActionType.SHRINK_MASK: self._execute_shrink_mask,
             ActionType.INVERT_MASK: self._execute_invert_mask,
             ActionType.COMBINE_MASKS: self._execute_combine_masks,
             ActionType.FEATHER_MASK: self._execute_feather_mask,
+            ActionType.REFINE_SELECTION: self._execute_refine_selection,
+            ActionType.REMOVE_SMALL_ISLANDS: self._execute_remove_small_islands,
+            ActionType.FILL_MASK_HOLES: self._execute_fill_mask_holes,
             ActionType.DRAW_SHAPE: self._execute_draw_shape,
+            ActionType.DRAW_PATH: self._execute_draw_path,
+            ActionType.BRUSH_STROKE: self._execute_brush_stroke,
+            ActionType.ERASE_STROKE: self._execute_erase_stroke,
             ActionType.PAINT_BUCKET_FILL: self._execute_paint_bucket_fill,
+            ActionType.GRADIENT_FILL: self._execute_gradient_fill,
+            ActionType.PATTERN_FILL: self._execute_pattern_fill,
             ActionType.BLUR_REGION: self._execute_blur_region,
+            ActionType.SHARPEN_REGION: self._execute_sharpen_region,
+            ActionType.NOISE_REDUCE: self._execute_noise_reduce,
+            ActionType.MEDIAN_FILTER: self._execute_median_filter,
+            ActionType.EDGE_DETECT: self._execute_edge_detect,
+            ActionType.DROP_SHADOW: self._execute_drop_shadow,
+            ActionType.STROKE_SELECTION: self._execute_stroke_selection,
             ActionType.CLEAR_REGION: self._execute_clear_region,
+            ActionType.CUT: self._execute_cut,
+            ActionType.COPY: self._execute_copy,
+            ActionType.PASTE: self._execute_paste,
+            ActionType.PASTE_AS_NEW_LAYER: self._execute_paste,
+            ActionType.DUPLICATE_REGION_TO_LAYER: self._execute_duplicate_region_to_layer,
+            ActionType.ADJUST_BRIGHTNESS_CONTRAST: self._execute_adjust_brightness_contrast,
+            ActionType.ADJUST_HUE_SATURATION: self._execute_adjust_hue_saturation,
+            ActionType.ADJUST_LEVELS: self._execute_adjust_levels,
+            ActionType.ADJUST_CURVES: self._execute_adjust_curves,
+            ActionType.COLORIZE: self._execute_colorize,
+            ActionType.REPLACE_COLOR: self._execute_replace_color,
+            ActionType.DESATURATE: self._execute_desaturate,
+            ActionType.CREATE_TEXT_LAYER: self._execute_create_text_layer,
+            ActionType.EDIT_TEXT_LAYER: self._execute_edit_text_layer,
+            ActionType.RASTERIZE_TEXT_LAYER: self._execute_rasterize_text_layer,
+            ActionType.DETECT_SHAPE: self._execute_detect_shape,
+            ActionType.DETECT_OBJECTS: self._execute_detect_objects,
+            ActionType.SEGMENT_OBJECT: self._execute_segment_object,
+            ActionType.ESTIMATE_DEPTH: self._execute_estimate_depth,
+            ActionType.EXTRACT_LINE_ART: self._execute_extract_line_art,
+            ActionType.DECOMPOSE_TO_LAYERS: self._execute_decompose_to_layers,
+            ActionType.TXT2IMG_TO_LAYER: self._execute_txt2img_to_layer,
+            ActionType.IMG2IMG_TO_LAYER: self._execute_img2img_to_layer,
+            ActionType.INPAINT_REGION: self._execute_inpaint_region,
+            ActionType.OUTPAINT_REGION: self._execute_outpaint_region,
             ActionType.EXPORT_FLAT: self._execute_export_flat,
+            ActionType.EXPORT_LAYERED_BUNDLE: self._execute_export_layered_bundle,
+            ActionType.VALIDATE: self._execute_validate,
             ActionType.NO_OP: self._execute_no_op,
         }
         handler = handlers.get(ActionType(action.type))
@@ -252,6 +308,36 @@ class Executor:
         document.metadata = snapshot.metadata
         document.revision = snapshot.revision
         document.annotations = snapshot.annotations
+
+    def _execute_new_document(self, document: DocumentState, action: Action) -> ActionResult:
+        """Replace the current document contents with a new empty canvas."""
+        params = action.params
+        document.id = action.target.document_id or document.id
+        document.canvas = CanvasSpec(
+            width=int(params["width"]),
+            height=int(params["height"]),
+            color_space=ColorSpace(params.get("color_space", ColorSpace.SRGB.value)),
+            background_color_rgba=_parse_color(params.get("background_color", "#00000000")),
+            dpi=None if params.get("dpi") is None else float(params["dpi"]),
+        )
+        document.layers = []
+        document.masks = {}
+        document.active_layer_id = None
+        document.active_selection_mask_id = None
+        document.metadata = DocumentMetadata(
+            title=params.get("title"),
+            author=params.get("author"),
+            source_file=params.get("source_file"),
+            tags=list(params.get("tags", [])),
+            custom=dict(params.get("custom_metadata", {})),
+        )
+        document.annotations = {}
+        document.revision = 0
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            metadata={"new_document": {"width": document.canvas.width, "height": document.canvas.height}},
+        )
 
     def _execute_resize_canvas(self, document: DocumentState, action: Action) -> ActionResult:
         """Resize the canvas around its center, padding or cropping all arrays."""
@@ -546,6 +632,135 @@ class Executor:
             return self._flatten_image(document, action)
         raise ValueError(f"unsupported merge mode {mode!r}")
 
+    def _execute_move_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Translate a layer's pixels on the full canvas."""
+        params = dict(action.params)
+        params["operation"] = "translate"
+        return self._transform_layer_pixels(document, action, params)
+
+    def _execute_scale_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Scale a layer around an anchor point."""
+        params = dict(action.params)
+        params["operation"] = "scale"
+        return self._transform_layer_pixels(document, action, params)
+
+    def _execute_rotate_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Rotate a layer around an anchor point."""
+        params = dict(action.params)
+        params["operation"] = "rotate"
+        return self._transform_layer_pixels(document, action, params)
+
+    def _execute_flip_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Flip a layer horizontally and/or vertically around an anchor point."""
+        params = dict(action.params)
+        params["operation"] = "flip"
+        return self._transform_layer_pixels(document, action, params)
+
+    def _execute_transform_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Apply a destructive affine transform to a full-canvas raster layer."""
+        return self._transform_layer_pixels(document, action, action.params)
+
+    def _execute_align_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Move a layer's nontransparent content to a canvas edge or center."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        bbox = _content_bbox(layer.pixels)
+        if bbox is None:
+            return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id], metadata={"empty": True})
+        x0, y0, x1, y1 = bbox
+        margin = int(action.params.get("margin", 0))
+        horizontal = action.params.get("horizontal", "none")
+        vertical = action.params.get("vertical", "none")
+        dx = 0
+        dy = 0
+        if horizontal == "left":
+            dx = margin - x0
+        elif horizontal == "center":
+            dx = int(round((document.canvas.width - (x1 - x0)) / 2.0)) - x0
+        elif horizontal == "right":
+            dx = document.canvas.width - margin - x1
+        if vertical == "top":
+            dy = margin - y0
+        elif vertical == "center":
+            dy = int(round((document.canvas.height - (y1 - y0)) / 2.0)) - y0
+        elif vertical == "bottom":
+            dy = document.canvas.height - margin - y1
+        params = {"operation": "translate", "dx": dx, "dy": dy, "fill_color": action.params.get("fill_color", "#00000000")}
+        result = self._transform_layer_pixels(document, action, params)
+        result.metadata["alignment_delta_xy"] = [dx, dy]
+        return result
+
+    def _transform_layer_pixels(self, document: DocumentState, action: Action, params: dict[str, Any]) -> ActionResult:
+        """Apply an affine transform by resampling the layer's RGBA pixels."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        operation = params.get("operation", "affine")
+        anchor = _anchor_point(params.get("anchor"), document.canvas.width, document.canvas.height)
+        matrix = _transform_matrix(params, operation, anchor)
+        fill_color = _parse_color(params.get("fill_color", "#00000000"))
+        resample = params.get("resample", "bilinear")
+        layer.pixels = _affine_transform_rgba(layer.pixels, matrix, fill_color, resample)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id], metadata={"operation": operation})
+
+    def _execute_add_layer_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a layer-alpha mask and attach it to a layer."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        mask_id = _required_target(action.target.mask_id, "target.mask_id")
+        mode = action.params.get("mode", "from_selection")
+        if mode == "from_selection":
+            if document.active_selection_mask_id is None:
+                raise ValueError("add_layer_mask from_selection requires an active selection")
+            data = np.array(document.get_mask(document.active_selection_mask_id).data, copy=True)
+        elif mode == "from_alpha":
+            _require_pixel_layer(layer)
+            data = np.array(layer.pixels[..., 3], copy=True)
+        elif mode == "full":
+            data = np.ones((document.canvas.height, document.canvas.width), dtype=np.float32)
+        elif mode == "empty":
+            data = np.zeros((document.canvas.height, document.canvas.width), dtype=np.float32)
+        elif mode == "from_mask":
+            data = np.array(document.get_mask(action.params["source_mask_id"]).data, copy=True)
+        else:
+            raise ValueError(f"unsupported layer mask mode {mode!r}")
+        if action.params.get("invert", False):
+            data = 1.0 - data
+        mask = Mask(
+            id=mask_id,
+            name=action.params.get("name", f"{layer.name} mask"),
+            data=np.clip(data, 0.0, 1.0).astype(np.float32),
+            kind=MaskKind.LAYER_ALPHA,
+            hard=bool(np.all((data == 0.0) | (data == 1.0))),
+            source=action.id,
+        )
+        document.add_mask(mask)
+        layer.mask_id = mask.id
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id], changed_layer_ids=[layer.id])
+
+    def _execute_apply_layer_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Bake a layer mask into the layer alpha channel."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        if layer.mask_id is None:
+            raise ValueError(f"layer {layer.id!r} has no layer mask")
+        mask_id = layer.mask_id
+        layer.pixels = np.array(layer.pixels, copy=True)
+        layer.pixels[..., 3] *= document.get_mask(mask_id).data
+        if action.params.get("remove_mask", True):
+            layer.mask_id = None
+            document.remove_mask(mask_id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id], metadata={"applied_mask_id": mask_id})
+
+    def _execute_remove_layer_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Detach a layer mask and optionally remove it from the document registry."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        if layer.mask_id is None:
+            raise ValueError(f"layer {layer.id!r} has no layer mask")
+        mask_id = layer.mask_id
+        layer.mask_id = None
+        if action.params.get("remove_mask", False):
+            document.remove_mask(mask_id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id], metadata={"removed_mask_id": mask_id})
+
     def _execute_select_rect(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a rectangular selection mask and optionally make it active."""
         mask_id = _required_target(action.target.mask_id, "target.mask_id")
@@ -610,6 +825,42 @@ class Executor:
             document.set_active_selection(mask.id)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
 
+    def _execute_select_polygon(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a polygon or freehand selection mask."""
+        mask_id = _required_target(action.target.mask_id, "target.mask_id")
+        data = _polygon_mask(document.canvas.width, document.canvas.height, action.params["points"], bool(action.params.get("closed", True)))
+        mask = Mask(
+            id=mask_id,
+            name=action.params.get("name", mask_id),
+            data=data,
+            kind=MaskKind(action.params.get("kind", MaskKind.SELECTION.value)),
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_select_from_alpha(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a selection mask from a layer's alpha channel."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        threshold = float(action.params.get("threshold", 0.01))
+        data = (layer.pixels[..., 3] >= threshold).astype(np.float32)
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", f"{layer.name} alpha"),
+            data=data,
+            kind=MaskKind(action.params.get("kind", MaskKind.SELECTION.value)),
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
     def _execute_magic_wand_select(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a contiguous color-based selection from a seed point."""
         layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
@@ -633,6 +884,21 @@ class Executor:
         )
         document.add_mask(mask)
         if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_save_selection_as_mask(self, document: DocumentState, action: Action) -> ActionResult:
+        """Copy the active or requested selection mask into a new reusable mask."""
+        source_id = action.params.get("source_mask_id", document.active_selection_mask_id)
+        if source_id is None:
+            raise ValueError("save_selection_as_mask requires an active selection or params.source_mask_id")
+        source = document.get_mask(source_id)
+        output_id = _required_target(action.target.mask_id, "target.mask_id")
+        mask = source.clone(output_id, action.params.get("name", output_id))
+        mask.kind = MaskKind(action.params.get("kind", source.kind.value))
+        mask.source = action.id
+        document.add_mask(mask)
+        if action.params.get("set_active", False):
             document.set_active_selection(mask.id)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
 
@@ -714,6 +980,72 @@ class Executor:
         document.add_mask(feathered)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[feathered.id])
 
+    def _execute_refine_selection(self, document: DocumentState, action: Action) -> ActionResult:
+        """Apply common cleanup operations to a selection mask."""
+        source = document.get_mask(action.params["source_mask_id"])
+        data = np.array(source.data, copy=True)
+        if "threshold" in action.params:
+            data = (data >= float(action.params["threshold"])).astype(np.float32)
+        if int(action.params.get("grow_pixels", 0)) > 0:
+            _require_scipy("refine_selection grow")
+            data = _ndimage.binary_dilation(data > 0.0, structure=_disk_footprint(int(action.params["grow_pixels"]))).astype(np.float32)
+        if int(action.params.get("shrink_pixels", 0)) > 0:
+            _require_scipy("refine_selection shrink")
+            data = _ndimage.binary_erosion(data > 0.0, structure=_disk_footprint(int(action.params["shrink_pixels"]))).astype(np.float32)
+        if "min_area" in action.params:
+            data = _remove_small_components(data, int(action.params["min_area"]))
+        if float(action.params.get("feather_radius", 0.0)) > 0.0:
+            _require_scipy("refine_selection feather")
+            data = _ndimage.gaussian_filter(data, sigma=float(action.params["feather_radius"]), mode="nearest")
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", f"{source.name} refined"),
+            data=np.clip(data, 0.0, 1.0).astype(np.float32),
+            kind=source.kind,
+            hard=bool(np.all((data == 0.0) | (data == 1.0))),
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", False):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_remove_small_islands(self, document: DocumentState, action: Action) -> ActionResult:
+        """Remove connected mask components below a minimum area."""
+        source = document.get_mask(action.params["source_mask_id"])
+        min_area = int(action.params.get("min_area", 1))
+        data = _remove_small_components(source.data, min_area)
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", f"{source.name} cleaned"),
+            data=data,
+            kind=source.kind,
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", False):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_fill_mask_holes(self, document: DocumentState, action: Action) -> ActionResult:
+        """Fill enclosed holes in a hard mask."""
+        _require_scipy("fill_mask_holes")
+        source = document.get_mask(action.params["source_mask_id"])
+        data = _ndimage.binary_fill_holes(source.data > 0.0).astype(np.float32)
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", f"{source.name} holes filled"),
+            data=data,
+            kind=source.kind,
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", False):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
     def _execute_draw_shape(self, document: DocumentState, action: Action) -> ActionResult:
         """Rasterize a rectangle or ellipse onto a target layer."""
         layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
@@ -732,6 +1064,40 @@ class Executor:
             stroke_mask = _stroke_mask(document.canvas.width, document.canvas.height, shape, stroke["width"])
             _paint_rgba(proposed, stroke_mask > 0.0, _parse_color(stroke["color"]))
 
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_draw_path(self, document: DocumentState, action: Action) -> ActionResult:
+        """Stroke a polyline path onto a target layer."""
+        return self._paint_path(document, action, erase=False)
+
+    def _execute_brush_stroke(self, document: DocumentState, action: Action) -> ActionResult:
+        """Paint a brush stroke along a sequence of points."""
+        return self._paint_path(document, action, erase=False)
+
+    def _execute_erase_stroke(self, document: DocumentState, action: Action) -> ActionResult:
+        """Erase alpha along a sequence of points."""
+        return self._paint_path(document, action, erase=True)
+
+    def _paint_path(self, document: DocumentState, action: Action, erase: bool) -> ActionResult:
+        """Paint or erase a stroked path through the action write mask."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        proposed = np.array(layer.pixels, copy=True)
+        stroke_mask = _path_stroke_mask(document.canvas.width, document.canvas.height, action.params["points"], float(action.params.get("width", 1.0)), bool(action.params.get("closed", False)))
+        if erase:
+            proposed[stroke_mask > 0.0, 3] = 0.0
+            proposed[stroke_mask > 0.0, :3] = 0.0
+        else:
+            color = list(_parse_color(action.params["color"]))
+            color[3] *= float(action.params.get("opacity", 1.0))
+            mode = action.params.get("mode", "source_over")
+            if mode == "replace_rgba":
+                proposed[stroke_mask > 0.0, :] = np.asarray(color, dtype=np.float32)
+            elif mode == "alpha_to_zero":
+                proposed[stroke_mask > 0.0, 3] = 0.0
+            else:
+                _paint_rgba(proposed, stroke_mask > 0.0, tuple(color))
         layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
@@ -777,6 +1143,28 @@ class Executor:
         layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
+    def _execute_gradient_fill(self, document: DocumentState, action: Action) -> ActionResult:
+        """Fill the write mask with a linear or radial color gradient."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        proposed = np.array(layer.pixels, copy=True)
+        fill = _gradient_pixels(document.canvas.width, document.canvas.height, action.params)
+        mode = action.params.get("mode", "replace_rgba")
+        proposed = _apply_fill_mode(proposed, fill, mode)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_pattern_fill(self, document: DocumentState, action: Action) -> ActionResult:
+        """Fill the write mask with a simple repeating pattern."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        proposed = np.array(layer.pixels, copy=True)
+        fill = _pattern_pixels(document.canvas.width, document.canvas.height, action.params)
+        mode = action.params.get("mode", "replace_rgba")
+        proposed = _apply_fill_mode(proposed, fill, mode)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
     def _execute_blur_region(self, document: DocumentState, action: Action) -> ActionResult:
         """Blur selected channels inside a write mask."""
         _require_scipy("blur_region")
@@ -801,21 +1189,497 @@ class Executor:
         layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
-    def _execute_transform_layer(self, document: DocumentState, action: Action) -> ActionResult:
-        """Move, scale, rotate, or align a layer according to action params."""
-        return self._unsupported(action, document, "transform_layer")
+    def _execute_sharpen_region(self, document: DocumentState, action: Action) -> ActionResult:
+        """Sharpen RGB channels inside a write mask."""
+        _require_scipy("sharpen_region")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        radius = float(action.params.get("radius", 1.0))
+        amount = float(action.params.get("amount", 1.0))
+        proposed = np.array(layer.pixels, copy=True)
+        blurred = np.empty_like(layer.pixels[..., :3])
+        for channel_index in range(3):
+            blurred[..., channel_index] = _ndimage.gaussian_filter(layer.pixels[..., channel_index], sigma=radius, mode="nearest")
+        proposed[..., :3] = np.clip(layer.pixels[..., :3] + (layer.pixels[..., :3] - blurred) * amount, 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_noise_reduce(self, document: DocumentState, action: Action) -> ActionResult:
+        """Apply a conservative median denoise to RGB channels."""
+        _require_scipy("noise_reduce")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        radius = max(1, int(round(float(action.params.get("radius", 1.0)))))
+        proposed = np.array(layer.pixels, copy=True)
+        size = radius * 2 + 1
+        for channel_index in range(3):
+            proposed[..., channel_index] = _ndimage.median_filter(layer.pixels[..., channel_index], size=size, mode="nearest")
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_median_filter(self, document: DocumentState, action: Action) -> ActionResult:
+        """Apply a median filter to selected channels."""
+        _require_scipy("median_filter")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        radius = max(1, int(round(float(action.params.get("radius", 1.0)))))
+        channels = _channels(action.params.get("channels", "rgb"))
+        proposed = np.array(layer.pixels, copy=True)
+        size = radius * 2 + 1
+        for channel_name, channel_index in {"r": 0, "g": 1, "b": 2, "a": 3}.items():
+            if channel_name in channels:
+                proposed[..., channel_index] = _ndimage.median_filter(layer.pixels[..., channel_index], size=size, mode="nearest")
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_edge_detect(self, document: DocumentState, action: Action) -> ActionResult:
+        """Detect luminance edges and write them into the selected region."""
+        _require_scipy("edge_detect")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        luminance = _luminance(layer.pixels[..., :3])
+        sx = _ndimage.sobel(luminance, axis=1, mode="nearest")
+        sy = _ndimage.sobel(luminance, axis=0, mode="nearest")
+        edges = np.clip(np.hypot(sx, sy), 0.0, 1.0)
+        proposed = np.array(layer.pixels, copy=True)
+        mode = action.params.get("mode", "luminance")
+        if mode == "alpha":
+            proposed[..., 3] = edges
+        else:
+            proposed[..., :3] = edges[..., np.newaxis]
+            proposed[..., 3] = np.maximum(proposed[..., 3], edges)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_stroke_selection(self, document: DocumentState, action: Action) -> ActionResult:
+        """Paint an outline around a mask or the active selection."""
+        _require_scipy("stroke_selection")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        source_id = action.params.get("source_mask_id", document.active_selection_mask_id)
+        if source_id is None:
+            raise ValueError("stroke_selection requires an active selection or params.source_mask_id")
+        source = document.get_mask(source_id)
+        radius = max(1, int(round(float(action.params.get("radius", 1.0)))))
+        outer = _ndimage.binary_dilation(source.data > 0.0, structure=_disk_footprint(radius))
+        inner = _ndimage.binary_erosion(source.data > 0.0, structure=_disk_footprint(max(radius - 1, 0))) if radius > 1 else source.data > 0.0
+        stroke = outer & ~inner
+        proposed = np.array(layer.pixels, copy=True)
+        _paint_rgba(proposed, stroke, _parse_color(action.params.get("color", "#000000")))
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_drop_shadow(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a blurred offset shadow below the target layer."""
+        _require_scipy("drop_shadow")
+        source = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(source)
+        offset_x, offset_y = _point_to_float_pair(action.params.get("offset", [8, 8]))
+        blur_radius = float(action.params.get("blur_radius", action.params.get("radius", 8.0)))
+        color = _parse_color(action.params.get("color", "#00000080"))
+        opacity = float(action.params.get("opacity", 1.0))
+        alpha = source.pixels[..., 3]
+        shifted = _translate_mask(alpha, int(round(offset_x)), int(round(offset_y)))
+        if blur_radius > 0.0:
+            shifted = _ndimage.gaussian_filter(shifted, sigma=blur_radius, mode="constant", cval=0.0)
+        pixels = np.zeros_like(source.pixels)
+        pixels[..., :3] = color[:3]
+        pixels[..., 3] = np.clip(shifted * color[3] * opacity, 0.0, 1.0)
+        output_id = action.target.output_layer_id or f"{source.id}_shadow"
+        shadow = Layer(
+            id=output_id,
+            name=action.params.get("output_layer_name", f"{source.name} shadow"),
+            kind=LayerKind.RASTER,
+            pixels=pixels.astype(np.float32),
+            opacity=1.0,
+            blend_mode=BlendMode.NORMAL,
+        )
+        document.add_layer(shadow, _layer_index(document, source.id))
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[shadow.id])
+
+    def _execute_adjust_brightness_contrast(self, document: DocumentState, action: Action) -> ActionResult:
+        """Adjust layer brightness and contrast in RGB."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        brightness = float(action.params.get("brightness", 0.0))
+        contrast = float(action.params.get("contrast", 1.0))
+        proposed = np.array(layer.pixels, copy=True)
+        proposed[..., :3] = np.clip((proposed[..., :3] - 0.5) * contrast + 0.5 + brightness, 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_adjust_hue_saturation(self, document: DocumentState, action: Action) -> ActionResult:
+        """Adjust hue, saturation, and lightness in HSV space."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        proposed = np.array(layer.pixels, copy=True)
+        hsv = _rgb_to_hsv(proposed[..., :3])
+        hsv[..., 0] = (hsv[..., 0] + float(action.params.get("hue_degrees", 0.0)) / 360.0) % 1.0
+        hsv[..., 1] = np.clip(hsv[..., 1] * float(action.params.get("saturation", 1.0)), 0.0, 1.0)
+        value = _hsv_to_rgb(hsv)
+        lightness = float(action.params.get("lightness", 0.0))
+        proposed[..., :3] = np.clip(value + lightness, 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_adjust_levels(self, document: DocumentState, action: Action) -> ActionResult:
+        """Apply simple RGB levels remapping."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        in_black = float(action.params.get("in_black", 0.0))
+        in_white = float(action.params.get("in_white", 1.0))
+        out_black = float(action.params.get("out_black", 0.0))
+        out_white = float(action.params.get("out_white", 1.0))
+        gamma = float(action.params.get("gamma", 1.0))
+        if in_white <= in_black or gamma <= 0.0:
+            raise ValueError("levels require in_white > in_black and gamma > 0")
+        proposed = np.array(layer.pixels, copy=True)
+        normalized = np.clip((proposed[..., :3] - in_black) / (in_white - in_black), 0.0, 1.0)
+        normalized = normalized ** (1.0 / gamma)
+        proposed[..., :3] = np.clip(out_black + normalized * (out_white - out_black), 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_adjust_curves(self, document: DocumentState, action: Action) -> ActionResult:
+        """Apply a shared piecewise-linear curve to RGB channels."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        points = sorted((_point_to_float_pair(point) for point in action.params["points"]), key=lambda item: item[0])
+        xs = np.asarray([point[0] for point in points], dtype=np.float32)
+        ys = np.asarray([point[1] for point in points], dtype=np.float32)
+        proposed = np.array(layer.pixels, copy=True)
+        proposed[..., :3] = np.interp(proposed[..., :3], xs, ys).astype(np.float32)
+        proposed[..., :3] = np.clip(proposed[..., :3], 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_colorize(self, document: DocumentState, action: Action) -> ActionResult:
+        """Colorize a layer while preserving luminance."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        target = np.asarray(_parse_color(action.params.get("color", "#ff0000"))[:3], dtype=np.float32)
+        amount = float(action.params.get("amount", 1.0))
+        proposed = np.array(layer.pixels, copy=True)
+        lum = _luminance(proposed[..., :3])[..., np.newaxis]
+        colorized = lum * target
+        proposed[..., :3] = np.clip(proposed[..., :3] * (1.0 - amount) + colorized * amount, 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_replace_color(self, document: DocumentState, action: Action) -> ActionResult:
+        """Replace pixels near one color with another color."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        source = np.asarray(_parse_color(action.params["source_color"])[:3], dtype=np.float32)
+        target = np.asarray(_parse_color(action.params["target_color"])[:3], dtype=np.float32)
+        tolerance = float(action.params.get("tolerance", 0.1))
+        softness = max(float(action.params.get("softness", 0.0)), 1e-6)
+        distance = np.linalg.norm(layer.pixels[..., :3] - source, axis=-1)
+        weight = np.clip((tolerance + softness - distance) / softness, 0.0, 1.0)[..., np.newaxis]
+        proposed = np.array(layer.pixels, copy=True)
+        proposed[..., :3] = np.clip(proposed[..., :3] * (1.0 - weight) + target * weight, 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_desaturate(self, document: DocumentState, action: Action) -> ActionResult:
+        """Convert RGB toward grayscale."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        amount = float(action.params.get("amount", 1.0))
+        proposed = np.array(layer.pixels, copy=True)
+        gray = _luminance(proposed[..., :3])[..., np.newaxis]
+        proposed[..., :3] = np.clip(proposed[..., :3] * (1.0 - amount) + gray * amount, 0.0, 1.0)
+        layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_copy(self, document: DocumentState, action: Action) -> ActionResult:
+        """Copy a masked region into the executor clipboard."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        pixels, bbox = _copy_region_pixels(document, layer, action.params)
+        self.context.metadata["clipboard"] = {
+            "pixels": pixels,
+            "bbox_xyxy": bbox,
+            "source_layer_id": layer.id,
+        }
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, metadata={"clipboard_bbox_xyxy": bbox})
+
+    def _execute_cut(self, document: DocumentState, action: Action) -> ActionResult:
+        """Copy a region to the clipboard and clear it from the source layer."""
+        result = self._execute_copy(document, action)
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        mask = _region_mask(document, action.params)
+        proposed = np.array(layer.pixels, copy=True)
+        if action.params.get("clear_mode", "alpha_to_zero") == "rgba_to_zero":
+            proposed[mask > 0.0, :] = 0.0
+        else:
+            proposed[mask > 0.0, 3] = 0.0
+            if not action.params.get("preserve_rgb", False):
+                proposed[mask > 0.0, :3] = 0.0
+        layer.pixels = proposed
+        result.changed_layer_ids.append(layer.id)
+        return result
+
+    def _execute_paste(self, document: DocumentState, action: Action) -> ActionResult:
+        """Paste clipboard pixels as a new full-canvas layer."""
+        clipboard = self.context.metadata.get("clipboard")
+        if not isinstance(clipboard, dict) or not isinstance(clipboard.get("pixels"), np.ndarray):
+            raise ValueError("paste requires clipboard pixels created by copy or cut")
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        pixels = np.zeros((document.canvas.height, document.canvas.width, 4), dtype=np.float32)
+        clip = clipboard["pixels"]
+        x = int(action.params.get("x", clipboard["bbox_xyxy"][0]))
+        y = int(action.params.get("y", clipboard["bbox_xyxy"][1]))
+        _paste_pixels(pixels, clip, x, y)
+        layer = Layer(
+            id=output_id,
+            name=action.params.get("name", "Pasted Layer"),
+            kind=LayerKind.RASTER,
+            pixels=pixels,
+        )
+        document.add_layer(layer)
+        if action.params.get("set_active", True):
+            document.set_active_layer(layer.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[layer.id])
+
+    def _execute_duplicate_region_to_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Copy a source region directly into a new layer."""
+        self._execute_copy(document, action)
+        return self._execute_paste(document, action)
 
     def _execute_inpaint_region(self, document: DocumentState, action: Action) -> ActionResult:
         """Call the diffusion backend for a masked region and composite the result."""
-        return self._unsupported(action, document, "inpaint_region")
+        return self._execute_diffusion_region(document, action, "inpaint")
 
     def _execute_img2img_to_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Call an image-to-image backend and place the result on a target layer."""
-        return self._unsupported(action, document, "img2img_to_layer")
+        return self._execute_diffusion_to_layer(document, action, "img2img")
 
     def _execute_txt2img_to_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Call a text-to-image backend and import the result as a new layer."""
-        return self._unsupported(action, document, "txt2img_to_layer")
+        return self._execute_diffusion_to_layer(document, action, "txt2img")
+
+    def _execute_outpaint_region(self, document: DocumentState, action: Action) -> ActionResult:
+        """Call the diffusion backend for an outpainting region and composite the result."""
+        return self._execute_diffusion_region(document, action, "inpaint")
+
+    def _execute_create_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a rasterized text layer with editable text metadata."""
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        pixels, metadata = _render_text_pixels(document.canvas.width, document.canvas.height, action.params)
+        layer = Layer(
+            id=output_id,
+            name=action.params.get("name", "Text"),
+            kind=LayerKind.TEXT,
+            pixels=pixels,
+            metadata=metadata,
+        )
+        document.add_layer(layer)
+        if action.params.get("set_active", True):
+            document.set_active_layer(layer.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[layer.id])
+
+    def _execute_edit_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Update text metadata and rerender the text layer."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        params = dict(layer.metadata.get("text", {}))
+        params.update(action.params)
+        pixels, metadata = _render_text_pixels(document.canvas.width, document.canvas.height, params)
+        layer.kind = LayerKind.TEXT
+        layer.pixels = pixels
+        layer.metadata.update(metadata)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_rasterize_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
+        """Convert a text layer to an ordinary raster layer while preserving pixels."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        layer.kind = LayerKind.RASTER
+        layer.metadata["rasterized_from"] = "text"
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
+
+    def _execute_detect_shape(self, document: DocumentState, action: Action) -> ActionResult:
+        """Detect a coarse geometric shape from layer alpha."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        threshold = float(action.params.get("threshold", action.params.get("alpha_min", 0.01)))
+        observation = _shape_observation_from_mask(layer.pixels[..., 3] >= threshold)
+        document.annotations.setdefault("observations", {})[action.id] = observation
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, metadata={"observation": observation})
+
+    def _execute_detect_objects(self, document: DocumentState, action: Action) -> ActionResult:
+        """Detect connected alpha components as coarse object observations."""
+        _require_scipy("detect_objects")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        threshold = float(action.params.get("alpha_min", 0.01))
+        min_area = int(action.params.get("min_area", 1))
+        max_objects = int(action.params.get("max_objects", 32))
+        observations = _connected_component_observations(layer.pixels[..., 3] >= threshold, min_area, max_objects)
+        document.annotations.setdefault("observations", {})[action.id] = observations
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, metadata={"observations": observations})
+
+    def _execute_segment_object(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create an object mask from seed points, alpha, or luminance."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        mode = action.params.get("mode", "alpha")
+        if "seed_points" in action.params:
+            data = _magic_wand_mask(
+                layer.pixels,
+                action.params["seed_points"],
+                float(action.params.get("tolerance", 0.1)),
+                float(action.params.get("alpha_min", 0.01)),
+                diagonal=True,
+            )
+        elif mode == "luminance":
+            data = (_luminance(layer.pixels[..., :3]) >= float(action.params.get("threshold", 0.5))).astype(np.float32)
+        else:
+            data = (layer.pixels[..., 3] >= float(action.params.get("alpha_min", 0.01))).astype(np.float32)
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", "segmented object"),
+            data=data,
+            kind=MaskKind.OBJECT,
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_estimate_depth(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a simple luminance-based depth proxy mask."""
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        data = _luminance(layer.pixels[..., :3]).astype(np.float32)
+        if action.params.get("mode", "luminance") == "alpha":
+            data = layer.pixels[..., 3].astype(np.float32)
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", "estimated depth"),
+            data=np.clip(data, 0.0, 1.0),
+            kind=MaskKind.OBJECT,
+            hard=False,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_extract_line_art(self, document: DocumentState, action: Action) -> ActionResult:
+        """Create a mask from detected luminance edges."""
+        _require_scipy("extract_line_art")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        luminance = _luminance(layer.pixels[..., :3])
+        edges = np.hypot(_ndimage.sobel(luminance, axis=1, mode="nearest"), _ndimage.sobel(luminance, axis=0, mode="nearest"))
+        threshold = float(action.params.get("threshold", 0.25))
+        data = (edges >= threshold).astype(np.float32)
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", "line art"),
+            data=data,
+            kind=MaskKind.LINE_ART_REGION,
+            hard=True,
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", True):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
+    def _execute_decompose_to_layers(self, document: DocumentState, action: Action) -> ActionResult:
+        """Split connected alpha components into independent raster layers."""
+        _require_scipy("decompose_to_layers")
+        source = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(source)
+        min_area = int(action.params.get("min_area", 1))
+        max_objects = int(action.params.get("max_objects", 16))
+        labels, count = _ndimage.label(source.pixels[..., 3] > float(action.params.get("alpha_min", 0.01)))
+        created: list[str] = []
+        for label in range(1, count + 1):
+            region = labels == label
+            if int(np.count_nonzero(region)) < min_area:
+                continue
+            if len(created) >= max_objects:
+                break
+            output_id = f"{action.target.output_layer_id}_{len(created) + 1}"
+            pixels = np.zeros_like(source.pixels)
+            pixels[region, :] = source.pixels[region, :]
+            layer = Layer(
+                id=output_id,
+                name=f"{action.params.get('output_layer_name', source.name)} {len(created) + 1}",
+                kind=LayerKind.RASTER,
+                pixels=pixels,
+            )
+            document.add_layer(layer)
+            created.append(output_id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=created)
+
+    def _execute_diffusion_to_layer(self, document: DocumentState, action: Action, method: str) -> ActionResult:
+        """Call a configured diffusion backend and import returned pixels as a layer."""
+        backend = self.context.diffusion_backend
+        if backend is None:
+            raise RuntimeError(f"{method} requires a configured diffusion_backend")
+        job = self._diffusion_job(document, action)
+        response = getattr(backend, method)(job)
+        pixels = _pixels_from_backend_response(response)
+        pixels = _fit_pixels_to_canvas(pixels, document.canvas.width, document.canvas.height)
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        layer = Layer(
+            id=output_id,
+            name=action.params.get("output_layer_name", method),
+            kind=LayerKind.RASTER,
+            pixels=pixels,
+        )
+        document.add_layer(layer)
+        document.set_active_layer(layer.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[layer.id], output_assets=dict(response.get("assets", {})))
+
+    def _execute_diffusion_region(self, document: DocumentState, action: Action, method: str) -> ActionResult:
+        """Call a diffusion backend and composite the returned pixels through the write mask."""
+        backend = self.context.diffusion_backend
+        if backend is None:
+            raise RuntimeError(f"{method} requires a configured diffusion_backend")
+        target = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(target)
+        job = self._diffusion_job(document, action)
+        response = getattr(backend, method)(job)
+        generated = _fit_pixels_to_canvas(_pixels_from_backend_response(response), document.canvas.width, document.canvas.height)
+        output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
+        if action.params.get("mode", "replace_region") == "new_layer":
+            layer = Layer(id=output_id, name=action.params.get("output_layer_name", method), kind=LayerKind.RASTER, pixels=generated)
+            document.add_layer(layer)
+            return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_layer_ids=[layer.id], output_assets=dict(response.get("assets", {})))
+        proposed = np.array(target.pixels, copy=True)
+        proposed[..., :] = generated
+        target.pixels = self.apply_write_mask(target.pixels, proposed, action.write_mask_id, document)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[target.id], output_assets=dict(response.get("assets", {})))
+
+    def _diffusion_job(self, document: DocumentState, action: Action) -> dict[str, Any]:
+        """Build a backend job payload with prompt, preview, and mask context."""
+        job = dict(action.params.get("job", {}))
+        job.update(
+            {
+                "prompt": action.params.get("prompt", ""),
+                "negative_prompt": action.params.get("negative_prompt"),
+                "seed": action.params.get("seed"),
+                "denoise": action.params.get("denoise"),
+                "document_id": document.id,
+                "canvas": {"width": document.canvas.width, "height": document.canvas.height},
+                "preview": document.flatten_preview(),
+            }
+        )
+        if action.write_mask_id is not None:
+            job["mask"] = document.get_mask(action.write_mask_id).data
+        if action.target.layer_id is not None:
+            layer = document.get_layer(action.target.layer_id)
+            if layer.pixels is not None:
+                job["target_pixels"] = layer.pixels
+        return job
 
     def _execute_export_flat(self, document: DocumentState, action: Action) -> ActionResult:
         """Export a flattened preview to `.npy` or `.png`."""
@@ -842,9 +1706,100 @@ class Executor:
             output_assets={"path": str(path), "format": suffix[1:]},
         )
 
+    def _execute_export_layered_bundle(self, document: DocumentState, action: Action) -> ActionResult:
+        """Export a directory bundle containing document, layer, mask, and preview assets."""
+        root = Path(action.params["path"])
+        overwrite = bool(action.params.get("overwrite", True))
+        if root.exists() and any(root.iterdir()) and not overwrite:
+            raise FileExistsError(f"layered bundle path {root} already exists and is not empty")
+        root.mkdir(parents=True, exist_ok=True)
+        layers_dir = root / "layers"
+        masks_dir = root / "masks"
+        layers_dir.mkdir(exist_ok=True)
+        masks_dir.mkdir(exist_ok=True)
+
+        include_hidden = bool(action.params.get("include_hidden", True))
+        layer_entries: list[dict[str, Any]] = []
+        for index, layer in enumerate(document.layers):
+            entry = {
+                "id": layer.id,
+                "name": layer.name,
+                "index": index,
+                "kind": LayerKind(layer.kind).value,
+                "visible": layer.visible,
+                "opacity": float(layer.opacity),
+                "blend_mode": BlendMode(layer.blend_mode).value,
+                "mask_id": layer.mask_id,
+                "pixels": None,
+            }
+            if layer.pixels is not None and (include_hidden or layer.visible):
+                filename = f"layer_{index:04d}_{_safe_filename_segment(layer.id)}.png"
+                _save_rgba_png(layer.pixels, layers_dir / filename)
+                entry["pixels"] = {"path": f"layers/{filename}", "format": "png", "shape": list(layer.pixels.shape)}
+            layer_entries.append(entry)
+
+        mask_entries: list[dict[str, Any]] = []
+        for mask in document.masks.values():
+            filename = f"{_safe_filename_segment(mask.id)}.png"
+            _save_mask_png(mask.data, masks_dir / filename)
+            mask_entries.append(
+                {
+                    "id": mask.id,
+                    "name": mask.name,
+                    "kind": MaskKind(mask.kind).value,
+                    "hard": mask.hard,
+                    "source": mask.source,
+                    "data": {"path": f"masks/{filename}", "format": "png", "shape": list(mask.data.shape)},
+                }
+            )
+
+        preview_entry = None
+        if action.params.get("include_preview", True):
+            preview_path = root / "preview.png"
+            _save_rgba_png(document.flatten_preview(include_hidden=include_hidden), preview_path)
+            preview_entry = {"path": "preview.png", "format": "png"}
+
+        snapshot_path = root / "document_snapshot.json"
+        _write_json(snapshot_path, document.snapshot_summary())
+
+        manifest = {
+            "schema_version": "ai_edit_layered_bundle.v1",
+            "document_id": document.id,
+            "document_revision": document.revision,
+            "canvas": document.snapshot_summary()["canvas"],
+            "active_layer_id": document.active_layer_id,
+            "active_selection_mask_id": document.active_selection_mask_id,
+            "document_snapshot": "document_snapshot.json",
+            "preview": preview_entry,
+            "layers": layer_entries,
+            "masks": mask_entries,
+        }
+        _write_json(root / "manifest.json", manifest)
+
+        return ActionResult(
+            action_id=action.id,
+            status=ActionStatus.EXECUTED,
+            output_assets={
+                "path": str(root),
+                "format": "ai_edit_layered_bundle.v1",
+                "manifest": str(root / "manifest.json"),
+                "document_snapshot": str(snapshot_path),
+            },
+            metadata={"layer_count": len(layer_entries), "mask_count": len(mask_entries)},
+        )
+
     def _execute_no_op(self, document: DocumentState, action: Action) -> ActionResult:
         """Execute a no-op action."""
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, metadata={"no_op": True})
+
+    def _execute_validate(self, document: DocumentState, action: Action) -> ActionResult:
+        """Run document validation as an explicit non-mutating action."""
+        report = self._validator().validate_document(document)
+        status = ActionStatus.VALIDATED if not report.has_errors() else ActionStatus.FAILED
+        error = None
+        if report.has_errors():
+            error = ActionError(code="validation.failed", message="document validation failed", action_id=action.id, details=report.to_json())
+        return ActionResult(action_id=action.id, status=status, error=error, metadata={"validation": report.to_json()})
 
     def _merge_down(self, document: DocumentState, action: Action) -> ActionResult:
         """Merge the target layer into the layer immediately below it."""
@@ -1013,7 +1968,9 @@ def _mutates_document(action: Action) -> bool:
     """Return whether a successful action should advance the document revision."""
     return ActionType(action.type) not in {
         ActionType.EXPORT_FLAT,
+        ActionType.EXPORT_LAYERED_BUNDLE,
         ActionType.RASTERIZE_VECTOR_ASSET,
+        ActionType.COPY,
         ActionType.NO_OP,
         ActionType.VALIDATE,
     }
@@ -1071,6 +2028,408 @@ def _load_rgba_image(path: Path) -> np.ndarray:
     with Image.open(path) as image:
         rgba = image.convert("RGBA")
         return (np.asarray(rgba, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _require_pixel_layer(layer: Layer) -> None:
+    """Require a layer with full-canvas RGBA pixel data."""
+    if layer.pixels is None:
+        raise ValueError(f"layer {layer.id!r} has no pixel data")
+    if layer.pixels.ndim != 3 or layer.pixels.shape[2] != 4:
+        raise ValueError(f"layer {layer.id!r} pixels must have shape H x W x 4")
+
+
+def _content_bbox(pixels: np.ndarray, threshold: float = 0.0) -> Optional[tuple[int, int, int, int]]:
+    """Return half-open bbox around alpha greater than threshold."""
+    ys, xs = np.nonzero(pixels[..., 3] > threshold)
+    if xs.size == 0:
+        return None
+    return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+
+
+def _anchor_point(value: Any, width: int, height: int) -> tuple[float, float]:
+    """Return an absolute anchor point, defaulting to canvas center."""
+    if value is None:
+        return (width / 2.0, height / 2.0)
+    if isinstance(value, str):
+        lookup = {
+            "center": (width / 2.0, height / 2.0),
+            "top_left": (0.0, 0.0),
+            "top_right": (float(width), 0.0),
+            "bottom_left": (0.0, float(height)),
+            "bottom_right": (float(width), float(height)),
+        }
+        if value not in lookup:
+            raise ValueError(f"unsupported anchor {value!r}")
+        return lookup[value]
+    return _point_to_float_pair(value)
+
+
+def _transform_matrix(params: dict[str, Any], operation: str, anchor: tuple[float, float]) -> np.ndarray:
+    """Return a forward 3x3 affine matrix for layer transforms."""
+    if operation == "affine" and "matrix" in params:
+        a, b, c, d, e, f = [float(item) for item in params["matrix"]]
+        return np.array([[a, c, e], [b, d, f], [0.0, 0.0, 1.0]], dtype=np.float64)
+    ax, ay = anchor
+    to_anchor = np.array([[1.0, 0.0, ax], [0.0, 1.0, ay], [0.0, 0.0, 1.0]], dtype=np.float64)
+    from_anchor = np.array([[1.0, 0.0, -ax], [0.0, 1.0, -ay], [0.0, 0.0, 1.0]], dtype=np.float64)
+    if operation == "translate":
+        dx = float(params.get("dx", 0.0))
+        dy = float(params.get("dy", 0.0))
+        return np.array([[1.0, 0.0, dx], [0.0, 1.0, dy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    if operation == "scale":
+        sx = float(params.get("scale_x", 1.0))
+        sy = float(params.get("scale_y", sx))
+        local = np.array([[sx, 0.0, 0.0], [0.0, sy, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+        return to_anchor @ local @ from_anchor
+    if operation == "rotate":
+        angle = np.deg2rad(float(params.get("angle_degrees", 0.0)))
+        local = np.array(
+            [[float(np.cos(angle)), -float(np.sin(angle)), 0.0], [float(np.sin(angle)), float(np.cos(angle)), 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        return to_anchor @ local @ from_anchor
+    if operation == "flip":
+        sx = -1.0 if params.get("horizontal", True) else 1.0
+        sy = -1.0 if params.get("vertical", False) else 1.0
+        local = np.array([[sx, 0.0, 0.0], [0.0, sy, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+        return to_anchor @ local @ from_anchor
+    if operation == "affine":
+        return np.eye(3, dtype=np.float64)
+    raise ValueError(f"unsupported transform operation {operation!r}")
+
+
+def _affine_transform_rgba(
+    pixels: np.ndarray,
+    matrix: np.ndarray,
+    fill_color: tuple[float, float, float, float],
+    resample: str,
+) -> np.ndarray:
+    """Apply a forward affine matrix to RGBA pixels using Pillow resampling."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("layer transforms require Pillow") from exc
+    inverse = np.linalg.inv(matrix)
+    coefficients = (inverse[0, 0], inverse[0, 1], inverse[0, 2], inverse[1, 0], inverse[1, 1], inverse[1, 2])
+    resampling = {
+        "nearest": Image.Resampling.NEAREST,
+        "bilinear": Image.Resampling.BILINEAR,
+        "bicubic": Image.Resampling.BICUBIC,
+    }[resample]
+    image = Image.fromarray(np.clip(pixels * 255.0, 0.0, 255.0).astype(np.uint8), mode="RGBA")
+    fill = tuple(int(round(channel * 255.0)) for channel in fill_color)
+    transformed = image.transform(image.size, Image.Transform.AFFINE, coefficients, resample=resampling, fillcolor=fill)
+    return (np.asarray(transformed, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _polygon_mask(width: int, height: int, points: list[Any], closed: bool = True) -> np.ndarray:
+    """Rasterize a polygon or freehand path mask."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise RuntimeError("polygon selections require Pillow") from exc
+    image = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(image)
+    coords = [tuple(_point_to_float_pair(point)) for point in points]
+    if closed:
+        draw.polygon(coords, fill=255)
+    else:
+        draw.line(coords, fill=255, width=1)
+    return (np.asarray(image, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _path_stroke_mask(width: int, height: int, points: list[Any], stroke_width: float, closed: bool) -> np.ndarray:
+    """Rasterize a stroked polyline into a soft-ish mask."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise RuntimeError("path painting requires Pillow") from exc
+    scale = 4 if max(width, height) <= 1024 else 2
+    image = Image.new("L", (width * scale, height * scale), 0)
+    draw = ImageDraw.Draw(image)
+    coords = [(x * scale, y * scale) for x, y in (_point_to_float_pair(point) for point in points)]
+    if closed and coords:
+        coords = [*coords, coords[0]]
+    draw.line(coords, fill=255, width=max(1, int(round(stroke_width * scale))), joint="curve")
+    if scale != 1:
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
+    return (np.asarray(image, dtype=np.float32) / 255.0).astype(np.float32)
+
+
+def _gradient_pixels(width: int, height: int, params: dict[str, Any]) -> np.ndarray:
+    """Create a full-canvas RGBA gradient."""
+    colors = np.asarray([_parse_color(color) for color in params["colors"]], dtype=np.float32)
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    if params.get("type", "linear") == "radial":
+        cx, cy = _point_to_float_pair(params["center"])
+        radius = float(params["radius"])
+        t = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / max(radius, 1e-6)
+    else:
+        sx, sy = _point_to_float_pair(params["start"])
+        ex, ey = _point_to_float_pair(params["end"])
+        vx = ex - sx
+        vy = ey - sy
+        denom = max(vx * vx + vy * vy, 1e-6)
+        t = ((xx - sx) * vx + (yy - sy) * vy) / denom
+    t = np.clip(t, 0.0, 1.0)
+    if len(colors) == 2:
+        return (colors[0] * (1.0 - t[..., np.newaxis]) + colors[1] * t[..., np.newaxis]).astype(np.float32)
+    stops = np.linspace(0.0, 1.0, len(colors), dtype=np.float32)
+    output = np.zeros((height, width, 4), dtype=np.float32)
+    for channel in range(4):
+        output[..., channel] = np.interp(t, stops, colors[:, channel])
+    return output
+
+
+def _pattern_pixels(width: int, height: int, params: dict[str, Any]) -> np.ndarray:
+    """Create a simple repeating pattern image."""
+    pattern = params.get("pattern", "checkerboard")
+    if pattern == "image":
+        tile = _load_rgba_image(Path(params["path"]))
+        reps_y = int(np.ceil(height / tile.shape[0]))
+        reps_x = int(np.ceil(width / tile.shape[1]))
+        return np.tile(tile, (reps_y, reps_x, 1))[:height, :width, :].astype(np.float32)
+    colors = [_parse_color(color) for color in params.get("colors", ["#000000", "#ffffff"])]
+    yy, xx = np.mgrid[0:height, 0:width]
+    cell = int(params.get("cell_size", 16))
+    output = np.zeros((height, width, 4), dtype=np.float32)
+    if pattern == "stripes":
+        stripe = int(params.get("stripe_width", cell))
+        index = ((xx // stripe) % len(colors)).astype(int)
+    else:
+        index = (((xx // cell) + (yy // cell)) % len(colors)).astype(int)
+    for color_index, color in enumerate(colors):
+        output[index == color_index] = color
+    return output
+
+
+def _apply_fill_mode(destination: np.ndarray, fill: np.ndarray, mode: str) -> np.ndarray:
+    """Apply full-canvas fill pixels according to a simple paint mode."""
+    proposed = np.array(destination, copy=True)
+    if mode == "replace_rgb_preserve_alpha":
+        proposed[..., :3] = fill[..., :3]
+    elif mode == "source_over":
+        proposed = _source_over_rgba(proposed, fill[..., :3], fill[..., 3:4])
+    elif mode == "replace_rgba":
+        proposed[..., :] = fill
+    else:
+        raise ValueError(f"unsupported fill mode {mode!r}")
+    return np.clip(proposed, 0.0, 1.0).astype(np.float32)
+
+
+def _luminance(rgb: np.ndarray) -> np.ndarray:
+    """Return sRGB-style luminance from RGB floats."""
+    return (rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722).astype(np.float32)
+
+
+def _disk_footprint(radius: int) -> np.ndarray:
+    """Return a disk-shaped boolean footprint."""
+    if radius <= 0:
+        return np.ones((1, 1), dtype=bool)
+    y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    return (x * x + y * y) <= radius * radius
+
+
+def _remove_small_components(data: np.ndarray, min_area: int) -> np.ndarray:
+    """Remove connected components smaller than min_area."""
+    _require_scipy("remove_small_components")
+    labels, count = _ndimage.label(data > 0.0)
+    output = np.zeros_like(data, dtype=np.float32)
+    for label in range(1, count + 1):
+        region = labels == label
+        if int(np.count_nonzero(region)) >= min_area:
+            output[region] = 1.0
+    return output
+
+
+def _translate_mask(data: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    """Translate a 2D mask by integer pixels."""
+    output = np.zeros_like(data, dtype=np.float32)
+    height, width = data.shape
+    src_x0 = max(0, -dx)
+    src_y0 = max(0, -dy)
+    dst_x0 = max(0, dx)
+    dst_y0 = max(0, dy)
+    copy_w = min(width - src_x0, width - dst_x0)
+    copy_h = min(height - src_y0, height - dst_y0)
+    if copy_w > 0 and copy_h > 0:
+        output[dst_y0 : dst_y0 + copy_h, dst_x0 : dst_x0 + copy_w] = data[src_y0 : src_y0 + copy_h, src_x0 : src_x0 + copy_w]
+    return output
+
+
+def _point_to_float_pair(point: Any) -> tuple[float, float]:
+    """Validate a two-number point and return floats."""
+    if not isinstance(point, (list, tuple)) or len(point) != 2:
+        raise TypeError("points must be two-number lists")
+    if isinstance(point[0], bool) or isinstance(point[1], bool):
+        raise TypeError("point entries must be numbers")
+    return float(point[0]), float(point[1])
+
+
+def _region_mask(document: DocumentState, params: dict[str, Any]) -> np.ndarray:
+    """Return a full-canvas mask from params, active selection, or full canvas."""
+    if "source_mask_id" in params:
+        return np.array(document.get_mask(params["source_mask_id"]).data, dtype=np.float32, copy=True)
+    if "bbox_xyxy" in params:
+        return _rect_mask(document.canvas.width, document.canvas.height, params["bbox_xyxy"])
+    if document.active_selection_mask_id is not None:
+        return np.array(document.get_mask(document.active_selection_mask_id).data, dtype=np.float32, copy=True)
+    return np.ones((document.canvas.height, document.canvas.width), dtype=np.float32)
+
+
+def _copy_region_pixels(document: DocumentState, layer: Layer, params: dict[str, Any]) -> tuple[np.ndarray, list[int]]:
+    """Copy a region from a layer into a cropped RGBA array."""
+    mask = _region_mask(document, params)
+    ys, xs = np.nonzero(mask > 0.0)
+    if xs.size == 0:
+        raise ValueError("cannot copy an empty region")
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    pixels = np.array(layer.pixels[y0:y1, x0:x1, :], copy=True)
+    pixels[..., 3] *= mask[y0:y1, x0:x1]
+    return pixels.astype(np.float32), [x0, y0, x1, y1]
+
+
+def _paste_pixels(destination: np.ndarray, source: np.ndarray, x: int, y: int) -> None:
+    """Paste cropped source pixels into full-canvas destination at x/y."""
+    height, width = destination.shape[:2]
+    src_h, src_w = source.shape[:2]
+    dst_x0 = max(0, x)
+    dst_y0 = max(0, y)
+    src_x0 = max(0, -x)
+    src_y0 = max(0, -y)
+    copy_w = min(src_w - src_x0, width - dst_x0)
+    copy_h = min(src_h - src_y0, height - dst_y0)
+    if copy_w <= 0 or copy_h <= 0:
+        raise ValueError("pasted pixels do not intersect the canvas")
+    destination[dst_y0 : dst_y0 + copy_h, dst_x0 : dst_x0 + copy_w, :] = source[src_y0 : src_y0 + copy_h, src_x0 : src_x0 + copy_w, :]
+
+
+def _render_text_pixels(width: int, height: int, params: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
+    """Render text into a full-canvas RGBA layer and return text metadata."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise RuntimeError("text rendering requires Pillow") from exc
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    font_size = int(params.get("font_size", 32))
+    font_path = params.get("font_path")
+    try:
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.truetype("DejaVuSans.ttf", font_size)
+    except OSError:
+        font = ImageFont.load_default()
+    color = tuple(int(round(channel * 255.0)) for channel in _parse_color(params.get("color", "#000000")))
+    draw.multiline_text(
+        (int(params.get("x", 0)), int(params.get("y", 0))),
+        params.get("text", ""),
+        fill=color,
+        font=font,
+        anchor=params.get("anchor"),
+        align=params.get("align", "left"),
+        spacing=int(params.get("spacing", 0)),
+    )
+    metadata = {"text": dict(params), "rasterized": True}
+    return (np.asarray(image, dtype=np.float32) / 255.0).astype(np.float32), metadata
+
+
+def _shape_observation_from_mask(mask: np.ndarray) -> dict[str, Any]:
+    """Return a coarse geometric observation for a binary mask."""
+    ys, xs = np.nonzero(mask)
+    if xs.size == 0:
+        return {"type": "empty", "bbox_xyxy": [0, 0, 0, 0], "area_pixels": 0}
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    width = x1 - x0
+    height = y1 - y0
+    area = int(xs.size)
+    bbox_area = max(width * height, 1)
+    shape_type = "ellipse" if area / bbox_area < 0.86 else "rectangle"
+    return {"type": shape_type, "bbox_xyxy": [x0, y0, x1, y1], "area_pixels": area, "center": [float(xs.mean()), float(ys.mean())]}
+
+
+def _connected_component_observations(mask: np.ndarray, min_area: int, max_objects: int) -> list[dict[str, Any]]:
+    """Return connected component observations sorted by area descending."""
+    labels, count = _ndimage.label(mask)
+    observations = []
+    for label in range(1, count + 1):
+        region = labels == label
+        area = int(np.count_nonzero(region))
+        if area < min_area:
+            continue
+        observation = _shape_observation_from_mask(region)
+        observation["id"] = f"object_{label:04d}"
+        observations.append(observation)
+    observations.sort(key=lambda item: int(item["area_pixels"]), reverse=True)
+    return observations[:max_objects]
+
+
+def _rgb_to_hsv(rgb: np.ndarray) -> np.ndarray:
+    """Vectorized RGB to HSV conversion for float arrays."""
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    maxc = np.max(rgb, axis=-1)
+    minc = np.min(rgb, axis=-1)
+    v = maxc
+    delta = maxc - minc
+    s = np.zeros_like(maxc)
+    np.divide(delta, maxc, out=s, where=maxc > 0.0)
+    h = np.zeros_like(maxc)
+    mask = delta > 0.0
+    safe_delta = np.where(mask, delta, 1.0)
+    h = np.where((maxc == r) & mask, ((g - b) / safe_delta) % 6.0, h)
+    h = np.where((maxc == g) & mask, ((b - r) / safe_delta) + 2.0, h)
+    h = np.where((maxc == b) & mask, ((r - g) / safe_delta) + 4.0, h)
+    h = h / 6.0
+    return np.stack([h, s, v], axis=-1).astype(np.float32)
+
+
+def _hsv_to_rgb(hsv: np.ndarray) -> np.ndarray:
+    """Vectorized HSV to RGB conversion for float arrays."""
+    h = (hsv[..., 0] % 1.0) * 6.0
+    s = np.clip(hsv[..., 1], 0.0, 1.0)
+    v = np.clip(hsv[..., 2], 0.0, 1.0)
+    i = np.floor(h).astype(int)
+    f = h - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+    choices = [
+        np.stack([v, t, p], axis=-1),
+        np.stack([q, v, p], axis=-1),
+        np.stack([p, v, t], axis=-1),
+        np.stack([p, q, v], axis=-1),
+        np.stack([t, p, v], axis=-1),
+        np.stack([v, p, q], axis=-1),
+    ]
+    output = np.zeros_like(choices[0])
+    for index, choice in enumerate(choices):
+        output[i % 6 == index] = choice[i % 6 == index]
+    return output.astype(np.float32)
+
+
+def _pixels_from_backend_response(response: dict[str, Any]) -> np.ndarray:
+    """Read RGBA pixels from a diffusion backend response."""
+    if not isinstance(response, dict):
+        raise TypeError("diffusion backend response must be a dictionary")
+    pixels = response.get("pixels")
+    if isinstance(pixels, np.ndarray):
+        if pixels.dtype != np.float32:
+            pixels = pixels.astype(np.float32)
+        if pixels.max(initial=0.0) > 1.0:
+            pixels = pixels / 255.0
+        if pixels.ndim == 3 and pixels.shape[2] == 4:
+            return np.clip(pixels, 0.0, 1.0).astype(np.float32)
+    path = response.get("path") or response.get("image_path")
+    if path is not None:
+        return _load_rgba_image(Path(path))
+    raise ValueError("diffusion backend response must include RGBA pixels or an image path")
+
+
+def _fit_pixels_to_canvas(pixels: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Center crop/pad pixels to the document canvas size."""
+    if pixels.shape[:2] == (height, width):
+        return pixels.astype(np.float32, copy=True)
+    return _resize_rgba_centered(pixels, width, height, (0.0, 0.0, 0.0, 0.0))
 
 
 def _rasterize_vector_asset(
@@ -1632,6 +2991,44 @@ def _save_rgba_png(pixels: np.ndarray, path: Path) -> None:
         raise RuntimeError("PNG export requires Pillow") from exc
     image = Image.fromarray(np.clip(pixels * 255.0, 0.0, 255.0).astype(np.uint8), mode="RGBA")
     image.save(path)
+
+
+def _save_mask_png(data: np.ndarray, path: Path) -> None:
+    """Save a mask float array as an 8-bit grayscale PNG."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("mask PNG export requires Pillow") from exc
+    image = Image.fromarray(np.clip(data * 255.0, 0.0, 255.0).astype(np.uint8), mode="L")
+    image.save(path)
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    """Write a JSON file with stable formatting."""
+    path.write_text(json.dumps(_json_ready(data), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _json_ready(value: Any) -> Any:
+    """Convert common NumPy values to JSON-compatible objects."""
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
+
+
+def _safe_filename_segment(value: str) -> str:
+    """Return a filesystem-safe filename segment for a layer or mask ID."""
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value.strip())
+    return safe or "item"
 
 
 def _integer_coordinate(value: Any, field_name: str) -> int:

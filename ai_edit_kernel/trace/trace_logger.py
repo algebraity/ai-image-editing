@@ -24,6 +24,7 @@ from uuid import uuid4
 import numpy as np
 
 from ai_edit_kernel.document.document_state import DocumentState
+from ai_edit_kernel.planning.action_catalog import PLANNER_CATALOG_VERSION, available_action_specs
 from ai_edit_kernel.runtime.validator import ValidationReport
 from ai_edit_kernel.schema.actions import Action, ActionBatch, ActionResult, SCHEMA_VERSION as ACTION_SCHEMA_VERSION
 
@@ -31,7 +32,7 @@ from ai_edit_kernel.schema.actions import Action, ActionBatch, ActionResult, SCH
 TRACE_SCHEMA_VERSION = "ai_edit_trace.v1"
 DOCUMENT_SCHEMA_VERSION = "ai_edit_document.v1"
 TRAINING_SCHEMA_VERSION = "ai_edit_training_example.v1"
-TOOL_CATALOG_VERSION = "tools.v1"
+TOOL_CATALOG_VERSION = PLANNER_CATALOG_VERSION
 KERNEL_VERSION = "0.1.0"
 
 
@@ -300,6 +301,64 @@ class TraceLogger:
             )
         )
 
+    def log_planner_input(
+        self,
+        document: DocumentState,
+        planner_input: dict[str, Any],
+        asset_refs: Optional[dict[str, str]] = None,
+    ) -> None:
+        """Record the exact model-facing planner request."""
+        self._require_session()
+        if not isinstance(document, DocumentState):
+            raise TypeError("document must be a DocumentState")
+        if not isinstance(planner_input, dict):
+            raise TypeError("planner_input must be a dictionary")
+        self._append_event(
+            TraceEvent(
+                id=self._next_event_id(),
+                type=TraceEventType.PLANNER_INPUT,
+                timestamp=_utc_now(),
+                document_id=document.id,
+                document_revision_before=document.revision,
+                document_revision_after=document.revision,
+                payload=_json_safe(planner_input),
+                asset_refs=_string_mapping({} if asset_refs is None else asset_refs, "asset_refs"),
+            )
+        )
+        self._write_manifest()
+
+    def log_planner_output_raw(
+        self,
+        document: DocumentState,
+        raw_output: Any,
+        parser_status: str,
+        errors: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        """Record the raw planner response and parse/normalization status."""
+        self._require_session()
+        if not isinstance(document, DocumentState):
+            raise TypeError("document must be a DocumentState")
+        if not isinstance(parser_status, str) or parser_status == "":
+            raise ValueError("parser_status must be a non-empty string")
+        payload: dict[str, Any] = {
+            "raw_text": raw_output if isinstance(raw_output, str) else None,
+            "raw_json": raw_output if isinstance(raw_output, dict) else None,
+            "parser_status": parser_status,
+            "errors": [] if errors is None else errors,
+        }
+        self._append_event(
+            TraceEvent(
+                id=self._next_event_id(),
+                type=TraceEventType.PLANNER_OUTPUT_RAW,
+                timestamp=_utc_now(),
+                document_id=document.id,
+                document_revision_before=document.revision,
+                document_revision_after=document.revision,
+                payload=payload,
+            )
+        )
+        self._write_manifest()
+
     def log_action_batch_planned(self, batch: ActionBatch, document: Optional[DocumentState] = None) -> None:
         """Record a planned batch before execution."""
         self._require_session()
@@ -389,6 +448,125 @@ class TraceLogger:
                 document_revision_after=revision,
                 action_id=action.id if action is not None else None,
                 payload={"report": report.to_json()},
+            )
+        )
+        self._write_manifest()
+
+    def log_diffusion_job_started(
+        self,
+        document: DocumentState,
+        action: Action,
+        job_id: str,
+        operation: str,
+        *,
+        backend: Optional[str] = None,
+        params: Optional[dict[str, Any]] = None,
+        asset_refs: Optional[dict[str, str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Record that an external diffusion backend job started."""
+        self._require_session()
+        if not isinstance(document, DocumentState):
+            raise TypeError("document must be a DocumentState")
+        if not isinstance(action, Action):
+            raise TypeError("action must be an Action")
+        if not isinstance(job_id, str) or job_id == "":
+            raise ValueError("job_id must be a non-empty string")
+        if not isinstance(operation, str) or operation == "":
+            raise ValueError("operation must be a non-empty string")
+        self._append_event(
+            TraceEvent(
+                id=self._next_event_id(),
+                type=TraceEventType.DIFFUSION_JOB_STARTED,
+                timestamp=_utc_now(),
+                document_id=document.id,
+                document_revision_before=document.revision,
+                document_revision_after=document.revision,
+                action_id=action.id,
+                payload={
+                    "job_id": job_id,
+                    "operation": operation,
+                    "backend": backend,
+                    "params": {} if params is None else params,
+                },
+                asset_refs=_string_mapping({} if asset_refs is None else asset_refs, "asset_refs"),
+                metadata=_mapping_value({} if metadata is None else metadata, "metadata"),
+            )
+        )
+        self._write_manifest()
+
+    def log_diffusion_job_result(
+        self,
+        document: DocumentState,
+        action: Action,
+        job_id: str,
+        status: str,
+        *,
+        metrics: Optional[dict[str, Any]] = None,
+        asset_refs: Optional[dict[str, str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Record the final result returned by a diffusion backend job."""
+        self._require_session()
+        if not isinstance(document, DocumentState):
+            raise TypeError("document must be a DocumentState")
+        if not isinstance(action, Action):
+            raise TypeError("action must be an Action")
+        if not isinstance(job_id, str) or job_id == "":
+            raise ValueError("job_id must be a non-empty string")
+        if not isinstance(status, str) or status == "":
+            raise ValueError("status must be a non-empty string")
+        self._append_event(
+            TraceEvent(
+                id=self._next_event_id(),
+                type=TraceEventType.DIFFUSION_JOB_RESULT,
+                timestamp=_utc_now(),
+                document_id=document.id,
+                document_revision_before=document.revision,
+                document_revision_after=document.revision,
+                action_id=action.id,
+                payload={
+                    "job_id": job_id,
+                    "status": status,
+                    "metrics": {} if metrics is None else metrics,
+                },
+                asset_refs=_string_mapping({} if asset_refs is None else asset_refs, "asset_refs"),
+                metadata=_mapping_value({} if metadata is None else metadata, "metadata"),
+            )
+        )
+        self._write_manifest()
+
+    def log_human_feedback(
+        self,
+        document: DocumentState,
+        *,
+        accepted: bool,
+        rating: Optional[dict[str, Any]] = None,
+        comments: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Record human acceptance, ratings, and comments for a session."""
+        self._require_session()
+        if not isinstance(document, DocumentState):
+            raise TypeError("document must be a DocumentState")
+        if not isinstance(accepted, bool):
+            raise TypeError("accepted must be a bool")
+        if comments is not None and not isinstance(comments, str):
+            raise TypeError("comments must be a string or None")
+        self._append_event(
+            TraceEvent(
+                id=self._next_event_id(),
+                type=TraceEventType.HUMAN_FEEDBACK,
+                timestamp=_utc_now(),
+                document_id=document.id,
+                document_revision_before=document.revision,
+                document_revision_after=document.revision,
+                payload={
+                    "accepted": accepted,
+                    "rating": None if rating is None else _mapping_value(rating, "rating"),
+                    "comments": comments,
+                },
+                metadata=_mapping_value({} if metadata is None else metadata, "metadata"),
             )
         )
         self._write_manifest()
@@ -843,41 +1021,9 @@ def _collect_validation_metrics(events: list[TraceEvent]) -> dict[str, Any]:
     return metrics
 
 
-def _available_tools() -> list[dict[str, str]]:
+def _available_tools() -> list[dict[str, Any]]:
     """Return the prototype tool catalog used by training export."""
-    return [
-        {"name": "resize_canvas", "description": "Resize the canvas around its center."},
-        {"name": "crop", "description": "Crop the document, or clear outside a crop on one layer or mask."},
-        {"name": "import_image_as_layer", "description": "Import an image file into a full-canvas raster layer."},
-        {"name": "import_vector_as_raster", "description": "Rasterize a vector asset and import it as a full-canvas raster layer."},
-        {"name": "rasterize_vector_asset", "description": "Rasterize a vector asset to a standalone PNG or NPY artifact."},
-        {"name": "create_layer", "description": "Create a new full-canvas layer."},
-        {"name": "delete_layer", "description": "Remove a layer from the document stack."},
-        {"name": "duplicate_layer", "description": "Create a deep copy of a layer."},
-        {"name": "rename_layer", "description": "Rename a layer without changing its ID."},
-        {"name": "reorder_layer", "description": "Move a layer to a new stack index."},
-        {"name": "set_active_layer", "description": "Set the active layer."},
-        {"name": "set_layer_visibility", "description": "Show or hide a layer."},
-        {"name": "set_layer_opacity", "description": "Set a layer's opacity."},
-        {"name": "set_blend_mode", "description": "Set a layer's blend mode metadata."},
-        {"name": "merge_layers", "description": "Merge layers using normal source-over compositing."},
-        {"name": "select_rect", "description": "Create a rectangular selection mask."},
-        {"name": "select_ellipse", "description": "Create an elliptical selection mask."},
-        {"name": "select_color_range", "description": "Create a mask from pixels close to a target color."},
-        {"name": "magic_wand_select", "description": "Create a contiguous color-based selection from seed points."},
-        {"name": "create_mask_from_shape", "description": "Create a mask from a deterministic geometric shape."},
-        {"name": "grow_mask", "description": "Grow a mask by a pixel radius."},
-        {"name": "shrink_mask", "description": "Shrink a mask by a pixel radius."},
-        {"name": "invert_mask", "description": "Invert a mask."},
-        {"name": "combine_masks", "description": "Combine masks with union, intersect, or subtract."},
-        {"name": "feather_mask", "description": "Create a softened copy of a mask."},
-        {"name": "draw_shape", "description": "Draw a deterministic geometric shape on a target layer."},
-        {"name": "paint_bucket_fill", "description": "Fill the current write mask on a target layer with a color."},
-        {"name": "blur_region", "description": "Apply Gaussian blur to selected channels through a write mask."},
-        {"name": "clear_region", "description": "Clear pixels or alpha inside a write mask on a target layer."},
-        {"name": "export_flat", "description": "Export a flattened preview image."},
-        {"name": "no_op", "description": "Execute no document mutation."},
-    ]
+    return available_action_specs()
 
 
 def _safe_label(label: str) -> str:

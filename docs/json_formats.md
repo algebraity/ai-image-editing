@@ -54,7 +54,7 @@ Required fields should be present for every saved session. Optional fields may b
     "kernel_version": "0.1.0",
     "action_schema_version": "ai_edit_actions.v1",
     "document_schema_version": "ai_edit_document.v1",
-    "tool_catalog_version": "tools.v1"
+    "tool_catalog_version": "planner_tools.v1"
   },
   "environment": {
     "python_version": "3.12",
@@ -240,15 +240,42 @@ to paths relative to the trace directory.
   "document_revision_after": 0,
   "action_id": null,
   "payload": {
+    "schema_version": "ai_edit_planner_request.v1",
     "user_prompt": "Change the icon from a circle to a square.",
     "document_summary": {},
     "observations": [],
-    "available_tools": [
+    "tool_catalog_version": "planner_tools.v1",
+    "available_actions": [
       {
         "name": "draw_shape",
-        "description": "Draw a deterministic geometric shape on a target layer."
+        "category": "paint",
+        "summary": "Draw a deterministic rectangle or ellipse.",
+        "planner_schema": {
+          "type": "object",
+          "required": ["type", "params"],
+          "properties": {
+            "type": {"const": "draw_shape"},
+            "target": {
+              "type": "object",
+              "properties": {
+                "layer_id": {
+                  "type": "string",
+                  "description": "Optional; defaults to the active layer when omitted."
+                }
+              }
+            },
+            "write_mask_id": {
+              "type": "string",
+              "description": "Optional; generated as a full-canvas write mask when omitted."
+            },
+            "params": {}
+          }
+        },
+        "kernel_filled_fields": ["id", "created_by", "preconditions", "expected_result"]
       }
-    ]
+    ],
+    "output_contract": {},
+    "previous_errors": []
   },
   "asset_refs": {
     "visible_preview": "previews/doc_rev_0000.png"
@@ -256,6 +283,55 @@ to paths relative to the trace directory.
   "metadata": {}
 }
 ```
+
+Planner backends return the smaller schema `ai_edit_planner_output.v1`, not a
+full trace and not a canonical action batch. The planner layer normalizes this
+into `ai_edit_actions.v1` by generating action IDs, output IDs when omitted,
+preconditions, expected-result metadata, and default write masks.
+
+```json
+{
+  "schema_version": "ai_edit_planner_output.v1",
+  "description": "Create a border layer and draw a black rectangle.",
+  "stop_on_error": true,
+  "actions": [
+    {
+      "type": "create_layer",
+      "target": {
+        "output_layer_id": "layer_border"
+      },
+      "params": {
+        "name": "border",
+        "color": "#00000000"
+      }
+    },
+    {
+      "type": "draw_shape",
+      "target": {
+        "layer_id": "layer_border"
+      },
+      "params": {
+        "shape": {
+          "type": "rectangle",
+          "bbox_xyxy": [128, 128, 896, 896],
+          "corner_radius": 0
+        },
+        "stroke": {
+          "color": "#000000",
+          "width": 24
+        },
+        "fill": null
+      }
+    }
+  ],
+  "metadata": {}
+}
+```
+
+If a generated layer or mask will be used by later planner actions, the model
+should provide a semantic `target.output_layer_id` or `target.mask_id` and reuse
+that same string later. The planner treats those strings as aliases and carries
+them into the canonical action batch.
 
 ### `planner_output_raw`
 
@@ -271,7 +347,8 @@ to paths relative to the trace directory.
   "payload": {
     "raw_text": null,
     "raw_json": {},
-    "parser_status": "parsed"
+    "parser_status": "parsed",
+    "errors": []
   },
   "asset_refs": {},
   "metadata": {}
@@ -578,6 +655,32 @@ Every action uses this envelope:
 ## Prototype Action Formats
 
 These are the executable prototype action types.
+
+### `new_document`
+
+```json
+{
+  "id": "action_new_document",
+  "type": "new_document",
+  "target": {
+    "document_id": "doc_new"
+  },
+  "params": {
+    "width": 1024,
+    "height": 1024,
+    "color_space": "srgb",
+    "background_color": "#00000000",
+    "dpi": null,
+    "title": "Untitled"
+  }
+}
+```
+
+`new_document` resets the current in-memory `DocumentState` to an empty canvas.
+It clears layers, masks, active references, and annotations, replaces document
+metadata from the supplied params, and starts the new document at revision `1`
+after executor revision handling. If `target.document_id` is omitted, the
+existing document ID is preserved.
 
 ### `resize_canvas`
 
@@ -1247,6 +1350,40 @@ filter and may be `reflect`, `constant`, `nearest`, `mirror`, or `wrap`.
 The prototype executor supports `.npy` directly and `.png` when Pillow is
 available.
 
+### `export_layered_bundle`
+
+```json
+{
+  "id": "action_export_bundle",
+  "type": "export_layered_bundle",
+  "params": {
+    "path": "exports/session_bundle",
+    "include_preview": true,
+    "include_hidden": true,
+    "overwrite": true
+  }
+}
+```
+
+The action writes a directory bundle without mutating the document:
+
+```text
+session_bundle/
+  manifest.json
+  document_snapshot.json
+  preview.png
+  layers/
+    layer_0000_layer_background.png
+  masks/
+    mask_full_canvas.png
+```
+
+`manifest.json` uses schema version `ai_edit_layered_bundle.v1` and records the
+canvas, active references, layer entries, mask entries, preview path, and
+snapshot path. Layer and preview images are RGBA PNGs. Masks are grayscale PNGs.
+`document_snapshot.json` contains the document's JSON-compatible
+`snapshot_summary()`.
+
 ### `no_op`
 
 ```json
@@ -1257,24 +1394,48 @@ available.
 }
 ```
 
-## Future Action Families
+## Additional Raster Action Families
 
-These action families exist in the enum but do not yet have finalized executable
-prototype schemas:
-
-- new-document actions
-- polygon and alpha selections
-- path, brush, gradient, cut, copy, paste, transform, and align actions
-- perception actions
-- diffusion actions
-
-When finalized, each should use the same action envelope and should prefer
+The executable prototype also includes the following raster-first action
+families. They use the same canonical action envelope shown above and prefer
 stable IDs over names.
+
+- Transform actions: `move_layer`, `scale_layer`, `rotate_layer`, `flip_layer`,
+  `transform_layer`, and `align_layer`.
+- Layer-mask actions: `add_layer_mask`, `apply_layer_mask`, and
+  `remove_layer_mask`.
+- Selection and mask-cleanup actions: `select_polygon`, `select_freehand`,
+  `select_from_alpha`, `save_selection_as_mask`, `refine_selection`,
+  `remove_small_islands`, and `fill_mask_holes`.
+- Drawing and fill actions: `draw_path`, `brush_stroke`, `erase_stroke`,
+  `gradient_fill`, and `pattern_fill`.
+- Clipboard and region-transfer actions: `copy`, `cut`, `paste`,
+  `paste_as_new_layer`, and `duplicate_region_to_layer`.
+- Color-adjustment actions: `adjust_brightness_contrast`,
+  `adjust_hue_saturation`, `adjust_levels`, `adjust_curves`, `colorize`,
+  `replace_color`, and `desaturate`.
+- Filter and style actions: `sharpen_region`, `noise_reduce`, `median_filter`,
+  `edge_detect`, `drop_shadow`, and `stroke_selection`.
+- Text actions: `create_text_layer`, `edit_text_layer`, and
+  `rasterize_text_layer`. Text layers store rasterized pixels plus editable text
+  metadata.
+- Perception bridge actions: `detect_shape`, `detect_objects`,
+  `segment_object`, `estimate_depth`, `extract_line_art`, and
+  `decompose_to_layers`. These are deterministic prototype helpers, not trained
+  perception models.
+- Diffusion bridge actions: `txt2img_to_layer`, `img2img_to_layer`,
+  `inpaint_region`, and `outpaint_region`. These require a configured diffusion
+  backend and keep diffusion as a subroutine rather than the whole edit process.
+
+All current `ActionType` enum members have executable prototype behavior.
 
 ## Training Example Format
 
 Training examples are derived artifacts, not the trace source of truth. They
 should reference the source session and use canonical action JSON in the target.
+`input.available_tools` contains the same detailed machine-readable action
+catalog entries used by `planner_input.available_actions`; abbreviated entries
+in examples stand in for those full catalog objects.
 
 ```json
 {
