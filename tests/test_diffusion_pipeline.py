@@ -20,7 +20,7 @@ from ai_edit_kernel.schema.actions import ActionBatch, SCHEMA_VERSION
 from ai_edit_kernel.trace.trace_logger import TraceLogger
 
 
-ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts" / "diffusion_pipeline"
+ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "tests" / "diffusion_pipeline"
 
 
 class DiffusionPipelineTests(unittest.TestCase):

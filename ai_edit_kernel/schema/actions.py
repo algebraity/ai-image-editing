@@ -87,6 +87,7 @@ class ActionType(str, Enum):
     REFINE_SELECTION = "refine_selection"
     REMOVE_SMALL_ISLANDS = "remove_small_islands"
     FILL_MASK_HOLES = "fill_mask_holes"
+    CLEANUP_FRINGE = "cleanup_fringe"
 
     # Drawing and pixel actions
     DRAW_SHAPE = "draw_shape"
@@ -856,16 +857,54 @@ def _validate_select_ellipse(action: Action) -> None:
     _bool_value(action.params.get("set_active", True), "params.set_active")
 
 
+def _validate_selection_color_options(params: dict[str, Any]) -> None:
+    color_space = params.get("color_space", "rgb")
+    _optional_enum_string(color_space, {"rgb", "hsv"}, "params.color_space")
+    if "tolerance" in params:
+        _nonnegative_number(params["tolerance"], "params.tolerance")
+    elif color_space == "rgb":
+        raise ValueError("params.tolerance is required when params.color_space is 'rgb'")
+    if "hue_tolerance_degrees" in params:
+        _nonnegative_number(params["hue_tolerance_degrees"], "params.hue_tolerance_degrees")
+        if float(params["hue_tolerance_degrees"]) > 180.0:
+            raise ValueError("params.hue_tolerance_degrees must be at most 180")
+    if "saturation_tolerance" in params:
+        _optional_unit_number(params["saturation_tolerance"], "params.saturation_tolerance")
+    if "value_tolerance" in params:
+        _optional_unit_number(params["value_tolerance"], "params.value_tolerance")
+
+
 def _validate_select_color_range(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
         "params",
-        {"name", "color", "tolerance", "bbox_xyxy", "alpha_min", "kind", "set_active"},
+        {
+            "name",
+            "color",
+            "seed_points",
+            "exclude_seed_points",
+            "tolerance",
+            "bbox_xyxy",
+            "alpha_min",
+            "color_space",
+            "hue_tolerance_degrees",
+            "saturation_tolerance",
+            "value_tolerance",
+            "kind",
+            "set_active",
+        },
     )
     _require_target_id(action.target.layer_id, "target.layer_id")
     _require_target_id(action.target.mask_id, "target.mask_id")
-    _validate_color(action.params.get("color"), "params.color")
-    _nonnegative_number(action.params.get("tolerance"), "params.tolerance")
+    if "color" not in action.params and "seed_points" not in action.params:
+        raise ValueError("select_color_range requires params.color or params.seed_points")
+    if "color" in action.params:
+        _validate_color(action.params["color"], "params.color")
+    if "seed_points" in action.params:
+        _point_list(action.params["seed_points"], "params.seed_points")
+    if "exclude_seed_points" in action.params:
+        _point_list(action.params["exclude_seed_points"], "params.exclude_seed_points")
+    _validate_selection_color_options(action.params)
     if "bbox_xyxy" in action.params:
         _bbox_xyxy(action.params["bbox_xyxy"], "params.bbox_xyxy")
     _optional_unit_number(action.params.get("alpha_min", 0.0), "params.alpha_min")
@@ -884,12 +923,33 @@ def _validate_magic_wand_select(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
         "params",
-        {"name", "seed_points", "tolerance", "alpha_min", "diagonal", "kind", "set_active"},
+        {
+            "name",
+            "seed_points",
+            "exclude_seed_points",
+            "tolerance",
+            "bbox_xyxy",
+            "alpha_min",
+            "diagonal",
+            "color_space",
+            "hue_tolerance_degrees",
+            "saturation_tolerance",
+            "value_tolerance",
+            "edge_stop_threshold",
+            "kind",
+            "set_active",
+        },
     )
     _require_target_id(action.target.layer_id, "target.layer_id")
     _require_target_id(action.target.mask_id, "target.mask_id")
     _point_list(action.params.get("seed_points"), "params.seed_points")
-    _nonnegative_number(action.params.get("tolerance"), "params.tolerance")
+    if "exclude_seed_points" in action.params:
+        _point_list(action.params["exclude_seed_points"], "params.exclude_seed_points")
+    _validate_selection_color_options(action.params)
+    if "bbox_xyxy" in action.params:
+        _bbox_xyxy(action.params["bbox_xyxy"], "params.bbox_xyxy")
+    if "edge_stop_threshold" in action.params:
+        _nonnegative_number(action.params["edge_stop_threshold"], "params.edge_stop_threshold")
     _optional_unit_number(action.params.get("alpha_min", 0.0), "params.alpha_min")
     _bool_value(action.params.get("diagonal", False), "params.diagonal")
     if "name" in action.params:
@@ -955,6 +1015,63 @@ def _validate_combine_masks(action: Action) -> None:
         raise ValueError("union and intersect combine_masks require at least two mask_ids")
     if "name" in action.params:
         _optional_string(action.params["name"], "params.name")
+
+
+def _validate_cleanup_fringe(action: Action) -> None:
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {
+            "source_mask_id",
+            "name",
+            "search_radius",
+            "old_colors",
+            "seed_points",
+            "protect_mask_ids",
+            "source_threshold",
+            "protect_threshold",
+            "include_source_mask",
+            "bbox_xyxy",
+            "alpha_min",
+            "color_space",
+            "tolerance",
+            "hue_tolerance_degrees",
+            "saturation_tolerance",
+            "value_tolerance",
+            "feather_radius",
+            "set_active",
+        },
+    )
+    _require_target_id(action.target.layer_id, "target.layer_id")
+    _require_target_id(action.target.mask_id, "target.mask_id")
+    _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "old_colors" not in action.params and "seed_points" not in action.params:
+        raise ValueError("cleanup_fringe requires params.old_colors or params.seed_points")
+    if "old_colors" in action.params:
+        _color_list(action.params["old_colors"], "params.old_colors")
+    if "seed_points" in action.params:
+        _point_list(action.params["seed_points"], "params.seed_points")
+    if "protect_mask_ids" in action.params:
+        _string_list(action.params["protect_mask_ids"], "params.protect_mask_ids")
+    if "search_radius" in action.params:
+        _nonnegative_int(action.params["search_radius"], "params.search_radius")
+    if "source_threshold" in action.params:
+        _optional_unit_number(action.params["source_threshold"], "params.source_threshold")
+    if "protect_threshold" in action.params:
+        _optional_unit_number(action.params["protect_threshold"], "params.protect_threshold")
+    if "include_source_mask" in action.params:
+        _bool_value(action.params["include_source_mask"], "params.include_source_mask")
+    if "bbox_xyxy" in action.params:
+        _bbox_xyxy(action.params["bbox_xyxy"], "params.bbox_xyxy")
+    _optional_unit_number(action.params.get("alpha_min", 0.0), "params.alpha_min")
+    color_options = dict(action.params)
+    color_options.setdefault("color_space", "hsv")
+    _validate_selection_color_options(color_options)
+    if "feather_radius" in action.params:
+        _nonnegative_number(action.params["feather_radius"], "params.feather_radius")
+    if "name" in action.params:
+        _optional_string(action.params["name"], "params.name")
+    _bool_value(action.params.get("set_active", False), "params.set_active")
 
 
 def _validate_feather_mask(action: Action) -> None:
@@ -1185,7 +1302,21 @@ def _validate_mask_cleanup(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
         "params",
-        {"source_mask_id", "name", "threshold", "feather_radius", "grow_pixels", "shrink_pixels", "min_area", "set_active"},
+        {
+            "source_mask_id",
+            "name",
+            "threshold",
+            "feather_radius",
+            "grow_pixels",
+            "shrink_pixels",
+            "close_pixels",
+            "open_pixels",
+            "min_area",
+            "fill_holes",
+            "max_hole_area",
+            "smooth_radius",
+            "set_active",
+        },
     )
     _require_target_id(action.target.mask_id, "target.mask_id")
     _required_string(action.params, "source_mask_id", "params.source_mask_id")
@@ -1197,8 +1328,18 @@ def _validate_mask_cleanup(action: Action) -> None:
         _nonnegative_int(action.params["grow_pixels"], "params.grow_pixels")
     if "shrink_pixels" in action.params:
         _nonnegative_int(action.params["shrink_pixels"], "params.shrink_pixels")
+    if "close_pixels" in action.params:
+        _nonnegative_int(action.params["close_pixels"], "params.close_pixels")
+    if "open_pixels" in action.params:
+        _nonnegative_int(action.params["open_pixels"], "params.open_pixels")
     if "min_area" in action.params:
         _nonnegative_int(action.params["min_area"], "params.min_area")
+    if "fill_holes" in action.params:
+        _bool_value(action.params["fill_holes"], "params.fill_holes")
+    if "max_hole_area" in action.params:
+        _nonnegative_int(action.params["max_hole_area"], "params.max_hole_area")
+    if "smooth_radius" in action.params:
+        _nonnegative_number(action.params["smooth_radius"], "params.smooth_radius")
     if "name" in action.params:
         _optional_string(action.params["name"], "params.name")
     _bool_value(action.params.get("set_active", False), "params.set_active")
@@ -1297,6 +1438,19 @@ def _validate_color_adjustment(action: Action) -> None:
     for key in ("color", "source_color", "target_color"):
         if key in action.params:
             _validate_color(action.params[key], f"params.{key}")
+    if action.type == ActionType.REPLACE_COLOR:
+        if "source_color" not in action.params:
+            raise ValueError("params.source_color is required")
+        if "target_color" not in action.params:
+            raise ValueError("params.target_color is required")
+        if "tolerance" in action.params:
+            _optional_unit_number(action.params["tolerance"], "params.tolerance")
+        if "softness" in action.params:
+            _optional_unit_number(action.params["softness"], "params.softness")
+    if action.type in {ActionType.COLORIZE, ActionType.DESATURATE} and "amount" in action.params:
+        _optional_unit_number(action.params["amount"], "params.amount")
+    if action.type == ActionType.COLORIZE and "color" not in action.params:
+        raise ValueError("params.color is required")
     if action.type == ActionType.ADJUST_CURVES:
         points = action.params.get("points")
         if not isinstance(points, list) or len(points) < 2:
@@ -1304,7 +1458,12 @@ def _validate_color_adjustment(action: Action) -> None:
         for index, point in enumerate(points):
             _point(point, f"params.points[{index}]")
     if "method" in action.params:
-        _optional_enum_string(action.params["method"], {"luminance", "average", "lightness"}, "params.method")
+        if action.type == ActionType.COLORIZE:
+            _optional_enum_string(action.params["method"], {"luminance", "set_hue_preserve_lightness", "set_hue_preserve_value", "material_hsl"}, "params.method")
+        elif action.type == ActionType.DESATURATE:
+            _optional_enum_string(action.params["method"], {"luminance", "average", "lightness"}, "params.method")
+        else:
+            _optional_enum_string(action.params["method"], {"luminance"}, "params.method")
 
 
 def _validate_filter_action(action: Action) -> None:
@@ -1474,7 +1633,36 @@ def _validate_text_layout_object(value: Any, field_name: str) -> None:
 
 
 def _validate_perception_action(action: Action) -> None:
-    _reject_unknown_keys(action.params, "params", {"threshold", "alpha_min", "tolerance", "seed_points", "mode", "name", "set_active", "output_layer_name", "min_area", "max_objects"})
+    _reject_unknown_keys(
+        action.params,
+        "params",
+        {
+            "threshold",
+            "alpha_min",
+            "tolerance",
+            "seed_points",
+            "positive_seed_points",
+            "negative_seed_points",
+            "bbox_xyxy",
+            "diagonal",
+            "color_space",
+            "hue_tolerance_degrees",
+            "saturation_tolerance",
+            "value_tolerance",
+            "edge_stop_threshold",
+            "negative_margin",
+            "source_mask_id",
+            "grow_pixels",
+            "feather_radius",
+            "contrast_threshold",
+            "mode",
+            "name",
+            "set_active",
+            "output_layer_name",
+            "min_area",
+            "max_objects",
+        },
+    )
     if action.type in {ActionType.DETECT_SHAPE, ActionType.DETECT_OBJECTS, ActionType.SEGMENT_OBJECT, ActionType.ESTIMATE_DEPTH, ActionType.EXTRACT_LINE_ART, ActionType.DECOMPOSE_TO_LAYERS}:
         _require_target_id(action.target.layer_id, "target.layer_id")
     if action.type in {ActionType.SEGMENT_OBJECT, ActionType.ESTIMATE_DEPTH, ActionType.EXTRACT_LINE_ART}:
@@ -1486,8 +1674,41 @@ def _validate_perception_action(action: Action) -> None:
             _optional_unit_number(action.params[key], f"params.{key}")
     if "seed_points" in action.params:
         _point_list(action.params["seed_points"], "params.seed_points")
+    if "positive_seed_points" in action.params:
+        _point_list(action.params["positive_seed_points"], "params.positive_seed_points")
+    if "negative_seed_points" in action.params:
+        _point_list(action.params["negative_seed_points"], "params.negative_seed_points")
+    if "bbox_xyxy" in action.params:
+        _bbox_xyxy(action.params["bbox_xyxy"], "params.bbox_xyxy")
+    if "diagonal" in action.params:
+        _bool_value(action.params["diagonal"], "params.diagonal")
+    if "color_space" in action.params:
+        _optional_enum_string(action.params["color_space"], {"rgb", "hsv"}, "params.color_space")
+    if "hue_tolerance_degrees" in action.params:
+        _nonnegative_number(action.params["hue_tolerance_degrees"], "params.hue_tolerance_degrees")
+        if float(action.params["hue_tolerance_degrees"]) > 180.0:
+            raise ValueError("params.hue_tolerance_degrees must be at most 180")
+    if "saturation_tolerance" in action.params:
+        _optional_unit_number(action.params["saturation_tolerance"], "params.saturation_tolerance")
+    if "value_tolerance" in action.params:
+        _optional_unit_number(action.params["value_tolerance"], "params.value_tolerance")
+    if "edge_stop_threshold" in action.params:
+        _nonnegative_number(action.params["edge_stop_threshold"], "params.edge_stop_threshold")
+    if "negative_margin" in action.params:
+        _nonnegative_number(action.params["negative_margin"], "params.negative_margin")
     if "mode" in action.params:
-        _optional_enum_string(action.params["mode"], {"alpha", "luminance", "color", "edges"}, "params.mode")
+        if action.type == ActionType.EXTRACT_LINE_ART:
+            _optional_enum_string(action.params["mode"], {"edges", "ink", "dark_pixels"}, "params.mode")
+        else:
+            _optional_enum_string(action.params["mode"], {"alpha", "luminance", "color", "edges", "seeded_object"}, "params.mode")
+    if "source_mask_id" in action.params:
+        _required_string(action.params, "source_mask_id", "params.source_mask_id")
+    if "grow_pixels" in action.params:
+        _nonnegative_int(action.params["grow_pixels"], "params.grow_pixels")
+    if "feather_radius" in action.params:
+        _nonnegative_number(action.params["feather_radius"], "params.feather_radius")
+    if "contrast_threshold" in action.params:
+        _optional_unit_number(action.params["contrast_threshold"], "params.contrast_threshold")
     if "min_area" in action.params:
         _nonnegative_int(action.params["min_area"], "params.min_area")
     if "max_objects" in action.params:
@@ -1595,6 +1816,7 @@ _PARAM_VALIDATORS = {
     ActionType.SHRINK_MASK: _validate_shrink_mask,
     ActionType.INVERT_MASK: _validate_invert_mask,
     ActionType.COMBINE_MASKS: _validate_combine_masks,
+    ActionType.CLEANUP_FRINGE: _validate_cleanup_fringe,
     ActionType.FEATHER_MASK: _validate_feather_mask,
     ActionType.REFINE_SELECTION: _validate_mask_cleanup,
     ActionType.REMOVE_SMALL_ISLANDS: _validate_mask_cleanup,
@@ -1704,6 +1926,13 @@ def _validate_color(value: Any, field_name: str) -> None:
             raise ValueError(f"{field_name} must contain hexadecimal digits") from exc
         return
     _rgba_sequence(value, field_name)
+
+
+def _color_list(value: Any, field_name: str) -> None:
+    if not isinstance(value, list) or len(value) == 0:
+        raise TypeError(f"{field_name} must be a non-empty list")
+    for index, item in enumerate(value):
+        _validate_color(item, f"{field_name}[{index}]")
 
 
 def _validate_channels(value: Any, field_name: str) -> set[str]:

@@ -84,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("tests") / "artifacts" / "venice_smoke",
+        default=Path("artifacts") / "venice_smoke",
         help="Artifact directory.",
     )
     parser.add_argument("--canvas-width", type=int, default=512, help="Smoke-test canvas width.")

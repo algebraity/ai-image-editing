@@ -187,6 +187,7 @@ class ActionBatchNormalizer:
         mask_aliases: dict[str, str] = {}
         pending_payloads: list[JsonObject] = []
         full_canvas_mask_planned = self.options.full_canvas_mask_id in known_mask_ids
+        active_selection_mask_id = document.active_selection_mask_id
 
         for item in actions_data:
             payload = self._normalize_action(
@@ -197,18 +198,28 @@ class ActionBatchNormalizer:
                 layer_aliases,
                 mask_aliases,
             )
+            if self._uses_generated_write_mask(payload) and active_selection_mask_id is not None:
+                payload["write_mask_id"] = active_selection_mask_id
             if self._needs_generated_full_canvas_mask(payload, full_canvas_mask_planned):
                 pending_payloads.append(self._full_canvas_mask_payload(document))
                 known_mask_ids.add(self.options.full_canvas_mask_id)
                 mask_aliases[self.options.full_canvas_mask_id] = self.options.full_canvas_mask_id
                 full_canvas_mask_planned = True
-            pending_payloads.append(payload)
             target = payload.get("target", {})
             if isinstance(target, dict):
+                if self._creates_or_replaces_mask(payload) and isinstance(target.get("mask_id"), str):
+                    if target["mask_id"] in known_mask_ids:
+                        raise ValueError(
+                            f"{payload['type']} target.mask_id {target['mask_id']!r} already exists; "
+                            "use a new mask ID for mask-producing actions"
+                        )
                 if isinstance(target.get("output_layer_id"), str):
                     known_layer_ids.add(target["output_layer_id"])
                 if isinstance(target.get("mask_id"), str) and self._creates_or_replaces_mask(payload):
                     known_mask_ids.add(target["mask_id"])
+                if self._sets_active_selection(payload) and isinstance(target.get("mask_id"), str):
+                    active_selection_mask_id = target["mask_id"]
+            pending_payloads.append(payload)
 
         canonical_actions = []
         for index, payload in enumerate(pending_payloads, start=1):
@@ -334,6 +345,10 @@ class ActionBatchNormalizer:
             return False
         return payload.get("write_mask_id") == self.options.full_canvas_mask_id
 
+    def _uses_generated_write_mask(self, payload: JsonObject) -> bool:
+        """Return whether `payload` is asking for the default generated write mask."""
+        return payload.get("write_mask_id") == self.options.full_canvas_mask_id
+
     def _full_canvas_mask_payload(self, document: DocumentState) -> JsonObject:
         """Return a canonical payload for the generated full-canvas write mask."""
         return {
@@ -360,6 +375,27 @@ class ActionBatchNormalizer:
         except Exception:
             return False
         return self._mask_target_is_output(action_type)
+
+    def _sets_active_selection(self, payload: JsonObject) -> bool:
+        """Return whether this mask-producing action makes its mask active."""
+        try:
+            action_type = ActionType(payload["type"])
+        except Exception:
+            return False
+        if not self._mask_target_is_output(action_type):
+            return False
+        params = _mapping_or_empty(payload.get("params"), "action params")
+        if "set_active" in params:
+            return _bool_or_default(params["set_active"], False)
+        return action_type in {
+            ActionType.SELECT_RECT,
+            ActionType.SELECT_ELLIPSE,
+            ActionType.SELECT_POLYGON,
+            ActionType.SELECT_FREEHAND,
+            ActionType.SELECT_FROM_ALPHA,
+            ActionType.SELECT_COLOR_RANGE,
+            ActionType.MAGIC_WAND_SELECT,
+        }
 
     def _mask_target_is_output(self, action_type: ActionType) -> bool:
         """Return whether target.mask_id names a newly written mask."""

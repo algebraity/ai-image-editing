@@ -241,6 +241,7 @@ class Executor:
             ActionType.SHRINK_MASK: self._execute_shrink_mask,
             ActionType.INVERT_MASK: self._execute_invert_mask,
             ActionType.COMBINE_MASKS: self._execute_combine_masks,
+            ActionType.CLEANUP_FRINGE: self._execute_cleanup_fringe,
             ActionType.FEATHER_MASK: self._execute_feather_mask,
             ActionType.REFINE_SELECTION: self._execute_refine_selection,
             ActionType.REMOVE_SMALL_ISLANDS: self._execute_remove_small_islands,
@@ -801,8 +802,7 @@ class Executor:
         mask_id = _required_target(action.target.mask_id, "target.mask_id")
         data = _color_range_mask(
             layer.pixels,
-            _parse_color(action.params["color"]),
-            float(action.params["tolerance"]),
+            action.params,
             float(action.params.get("alpha_min", 0.0)),
         )
         if "bbox_xyxy" in action.params:
@@ -886,9 +886,10 @@ class Executor:
         data = _magic_wand_mask(
             layer.pixels,
             action.params["seed_points"],
-            float(action.params["tolerance"]),
+            action.params,
             float(action.params.get("alpha_min", 0.0)),
             bool(action.params.get("diagonal", False)),
+            action.params.get("bbox_xyxy"),
         )
         mask = Mask(
             id=mask_id,
@@ -988,6 +989,58 @@ class Executor:
         document.add_mask(result)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[result.id])
 
+    def _execute_cleanup_fringe(self, document: DocumentState, action: Action) -> ActionResult:
+        """Extend a mask into nearby old-material edge pixels while preserving protected masks."""
+        _require_scipy("cleanup_fringe")
+        layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
+        _require_pixel_layer(layer)
+        source = document.get_mask(action.params["source_mask_id"])
+        source_data = np.clip(source.data, 0.0, 1.0).astype(np.float32)
+        source_threshold = float(action.params.get("source_threshold", 0.5))
+        source_binary = source_data >= source_threshold
+        search_radius = int(action.params.get("search_radius", 2))
+        if search_radius > 0:
+            grown = _ndimage.binary_dilation(source_binary, structure=_disk_footprint(search_radius))
+        else:
+            grown = np.array(source_binary, copy=True)
+        ring = grown & ~source_binary
+
+        params = _fringe_color_params(action.params)
+        targets = _fringe_target_colors(layer.pixels, action.params)
+        candidate = _color_similarity_mask(layer.pixels, targets, params) & ring
+        candidate &= layer.pixels[..., 3] >= float(action.params.get("alpha_min", 0.0))
+
+        if "bbox_xyxy" in action.params:
+            bbox_mask = np.zeros_like(candidate)
+            x0, y0, x1, y1 = _bbox_to_ints(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
+            bbox_mask[y0:y1, x0:x1] = True
+            candidate &= bbox_mask
+
+        protect_threshold = float(action.params.get("protect_threshold", 0.1))
+        for mask_id in action.params.get("protect_mask_ids", []):
+            candidate &= document.get_mask(mask_id).data <= protect_threshold
+
+        if bool(action.params.get("include_source_mask", True)):
+            data = np.maximum(source_data, candidate.astype(np.float32))
+        else:
+            data = candidate.astype(np.float32)
+
+        if float(action.params.get("feather_radius", 0.0)) > 0.0:
+            data = _ndimage.gaussian_filter(data, sigma=float(action.params["feather_radius"]), mode="nearest")
+
+        mask = Mask(
+            id=_required_target(action.target.mask_id, "target.mask_id"),
+            name=action.params.get("name", f"{source.name} fringe cleaned"),
+            data=np.clip(data, 0.0, 1.0).astype(np.float32),
+            kind=source.kind,
+            hard=bool(np.all((data == 0.0) | (data == 1.0))),
+            source=action.id,
+        )
+        document.add_mask(mask)
+        if action.params.get("set_active", False):
+            document.set_active_selection(mask.id)
+        return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
+
     def _execute_feather_mask(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a softened copy of a mask."""
         output_id = _required_target(action.target.mask_id, "target.mask_id")
@@ -1008,8 +1061,24 @@ class Executor:
         if int(action.params.get("shrink_pixels", 0)) > 0:
             _require_scipy("refine_selection shrink")
             data = _ndimage.binary_erosion(data > 0.0, structure=_disk_footprint(int(action.params["shrink_pixels"]))).astype(np.float32)
+        if int(action.params.get("close_pixels", 0)) > 0:
+            _require_scipy("refine_selection close")
+            data = _ndimage.binary_closing(data > 0.0, structure=_disk_footprint(int(action.params["close_pixels"]))).astype(np.float32)
+        if int(action.params.get("open_pixels", 0)) > 0:
+            _require_scipy("refine_selection open")
+            data = _ndimage.binary_opening(data > 0.0, structure=_disk_footprint(int(action.params["open_pixels"]))).astype(np.float32)
         if "min_area" in action.params:
             data = _remove_small_components(data, int(action.params["min_area"]))
+        if bool(action.params.get("fill_holes", False)):
+            _require_scipy("refine_selection fill_holes")
+            if "max_hole_area" in action.params:
+                data = _fill_mask_holes_up_to_area(data, int(action.params["max_hole_area"]))
+            else:
+                data = _ndimage.binary_fill_holes(data > 0.0).astype(np.float32)
+        if float(action.params.get("smooth_radius", 0.0)) > 0.0:
+            _require_scipy("refine_selection smooth")
+            smoothed = _ndimage.gaussian_filter(data.astype(np.float32), sigma=float(action.params["smooth_radius"]), mode="nearest")
+            data = (smoothed >= 0.5).astype(np.float32)
         if float(action.params.get("feather_radius", 0.0)) > 0.0:
             _require_scipy("refine_selection feather")
             data = _ndimage.gaussian_filter(data, sigma=float(action.params["feather_radius"]), mode="nearest")
@@ -1370,14 +1439,44 @@ class Executor:
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
     def _execute_colorize(self, document: DocumentState, action: Action) -> ActionResult:
-        """Colorize a layer while preserving luminance."""
+        """Colorize a layer with luminance, hue-preserving, or material-preserving methods."""
         layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
         _require_pixel_layer(layer)
         target = np.asarray(_parse_color(action.params.get("color", "#ff0000"))[:3], dtype=np.float32)
         amount = float(action.params.get("amount", 1.0))
+        method = action.params.get("method", "luminance")
         proposed = np.array(layer.pixels, copy=True)
-        lum = _luminance(proposed[..., :3])[..., np.newaxis]
-        colorized = lum * target
+        if method == "luminance":
+            lum = _luminance(proposed[..., :3])[..., np.newaxis]
+            colorized = lum * target
+        elif method == "set_hue_preserve_lightness":
+            hsl = _rgb_to_hsl(proposed[..., :3])
+            target_hsl = _rgb_to_hsl(target.reshape((1, 1, 3)))[0, 0]
+            hsl[..., 0] = target_hsl[0]
+            colorized = _hsl_to_rgb(hsl)
+        elif method == "set_hue_preserve_value":
+            hsv = _rgb_to_hsv(proposed[..., :3])
+            target_hsv = _rgb_to_hsv(target.reshape((1, 1, 3)))[0, 0]
+            hsv[..., 0] = target_hsv[0]
+            colorized = _hsv_to_rgb(hsv)
+        elif method == "material_hsl":
+            hsl = _rgb_to_hsl(proposed[..., :3])
+            target_hsl = _rgb_to_hsl(target.reshape((1, 1, 3)))[0, 0]
+            weights = _write_mask_weights(document, action.write_mask_id, proposed.shape[:2])
+            active = (weights > 0.001) & (proposed[..., 3] > 0.0)
+            if np.any(active):
+                source_lightness = float(np.average(hsl[..., 2][active], weights=weights[active]))
+            else:
+                source_lightness = float(np.mean(hsl[..., 2]))
+            contrast = float(action.params.get("contrast", 1.0))
+            saturation = float(action.params.get("saturation", 1.0))
+            lightness_shift = float(action.params.get("lightness", 0.0))
+            hsl[..., 0] = target_hsl[0]
+            hsl[..., 1] = np.clip(target_hsl[1] * saturation, 0.0, 1.0)
+            hsl[..., 2] = np.clip(target_hsl[2] + (hsl[..., 2] - source_lightness) * contrast + lightness_shift, 0.0, 1.0)
+            colorized = _hsl_to_rgb(hsl)
+        else:
+            raise ValueError(f"unsupported colorize method {method!r}")
         proposed[..., :3] = np.clip(proposed[..., :3] * (1.0 - amount) + colorized * amount, 0.0, 1.0)
         layer.pixels = self.apply_write_mask(layer.pixels, proposed, action.write_mask_id, document)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
@@ -1543,14 +1642,8 @@ class Executor:
         layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
         _require_pixel_layer(layer)
         mode = action.params.get("mode", "alpha")
-        if "seed_points" in action.params:
-            data = _magic_wand_mask(
-                layer.pixels,
-                action.params["seed_points"],
-                float(action.params.get("tolerance", 0.1)),
-                float(action.params.get("alpha_min", 0.01)),
-                diagonal=True,
-            )
+        if "positive_seed_points" in action.params or "seed_points" in action.params or mode == "seeded_object":
+            data = _seeded_object_mask(layer.pixels, action.params, float(action.params.get("alpha_min", 0.01)))
         elif mode == "luminance":
             data = (_luminance(layer.pixels[..., :3]) >= float(action.params.get("threshold", 0.5))).astype(np.float32)
         else:
@@ -1589,20 +1682,47 @@ class Executor:
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, created_mask_ids=[mask.id])
 
     def _execute_extract_line_art(self, document: DocumentState, action: Action) -> ActionResult:
-        """Create a mask from detected luminance edges."""
+        """Create a line-art mask from edges or dark ink-like pixels."""
         _require_scipy("extract_line_art")
         layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
         _require_pixel_layer(layer)
         luminance = _luminance(layer.pixels[..., :3])
-        edges = np.hypot(_ndimage.sobel(luminance, axis=1, mode="nearest"), _ndimage.sobel(luminance, axis=0, mode="nearest"))
-        threshold = float(action.params.get("threshold", 0.25))
-        data = (edges >= threshold).astype(np.float32)
+        mode = action.params.get("mode", "edges")
+        default_threshold = 0.25 if mode == "edges" else 0.18
+        threshold = float(action.params.get("threshold", default_threshold))
+        if mode == "edges":
+            edges = np.hypot(_ndimage.sobel(luminance, axis=1, mode="nearest"), _ndimage.sobel(luminance, axis=0, mode="nearest"))
+            data = edges >= threshold
+        elif mode in {"ink", "dark_pixels"}:
+            data = luminance <= threshold
+            if "contrast_threshold" in action.params:
+                local_max = _ndimage.maximum_filter(luminance, size=3, mode="nearest")
+                local_min = _ndimage.minimum_filter(luminance, size=3, mode="nearest")
+                data &= (local_max - local_min) >= float(action.params["contrast_threshold"])
+        else:
+            raise ValueError(f"unsupported line-art extraction mode {mode!r}")
+
+        data &= layer.pixels[..., 3] >= float(action.params.get("alpha_min", 0.0))
+        if "source_mask_id" in action.params:
+            data &= document.get_mask(action.params["source_mask_id"]).data > 0.0
+        if "bbox_xyxy" in action.params:
+            bbox_mask = np.zeros_like(data)
+            x0, y0, x1, y1 = _bbox_to_ints(action.params["bbox_xyxy"], document.canvas.width, document.canvas.height)
+            bbox_mask[y0:y1, x0:x1] = True
+            data &= bbox_mask
+        if "min_area" in action.params:
+            data = _remove_small_components(data.astype(np.float32), int(action.params["min_area"])) > 0.0
+        if int(action.params.get("grow_pixels", 0)) > 0:
+            data = _ndimage.binary_dilation(data, structure=_disk_footprint(int(action.params["grow_pixels"])))
+        mask_data = data.astype(np.float32)
+        if float(action.params.get("feather_radius", 0.0)) > 0.0:
+            mask_data = _ndimage.gaussian_filter(mask_data, sigma=float(action.params["feather_radius"]), mode="nearest")
         mask = Mask(
             id=_required_target(action.target.mask_id, "target.mask_id"),
             name=action.params.get("name", "line art"),
-            data=data,
+            data=np.clip(mask_data, 0.0, 1.0).astype(np.float32),
             kind=MaskKind.LINE_ART_REGION,
-            hard=True,
+            hard=bool(np.all((mask_data == 0.0) | (mask_data == 1.0))),
             source=action.id,
         )
         document.add_mask(mask)
@@ -2236,6 +2356,31 @@ def _remove_small_components(data: np.ndarray, min_area: int) -> np.ndarray:
     return output
 
 
+def _fill_mask_holes_up_to_area(data: np.ndarray, max_area: int) -> np.ndarray:
+    """Fill enclosed holes whose connected area is no larger than max_area."""
+    _require_scipy("fill_mask_holes_up_to_area")
+    binary = data > 0.0
+    filled = _ndimage.binary_fill_holes(binary)
+    holes = filled & ~binary
+    labels, count = _ndimage.label(holes)
+    output = np.array(binary, copy=True)
+    for label in range(1, count + 1):
+        region = labels == label
+        if int(np.count_nonzero(region)) <= max_area:
+            output[region] = True
+    return output.astype(np.float32)
+
+
+def _write_mask_weights(document: DocumentState, write_mask_id: str | None, shape: tuple[int, int]) -> np.ndarray:
+    """Return write-mask weights, or full weights when no mask is available."""
+    if write_mask_id is None:
+        return np.ones(shape, dtype=np.float32)
+    mask = document.get_mask(write_mask_id).data
+    if mask.shape != shape:
+        raise ValueError("write mask shape does not match layer pixels")
+    return np.clip(mask, 0.0, 1.0).astype(np.float32)
+
+
 def _translate_mask(data: np.ndarray, dx: int, dy: int) -> np.ndarray:
     """Translate a 2D mask by integer pixels."""
     output = np.zeros_like(data, dtype=np.float32)
@@ -2359,6 +2504,54 @@ def _hsv_to_rgb(hsv: np.ndarray) -> np.ndarray:
     for index, choice in enumerate(choices):
         output[i % 6 == index] = choice[i % 6 == index]
     return output.astype(np.float32)
+
+
+def _rgb_to_hsl(rgb: np.ndarray) -> np.ndarray:
+    """Vectorized RGB to HSL conversion for float arrays."""
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    maxc = np.max(rgb, axis=-1)
+    minc = np.min(rgb, axis=-1)
+    lightness = (maxc + minc) * 0.5
+    delta = maxc - minc
+
+    saturation = np.zeros_like(maxc)
+    denominator = 1.0 - np.abs(2.0 * lightness - 1.0)
+    np.divide(delta, denominator, out=saturation, where=denominator > 0.0)
+
+    hue = np.zeros_like(maxc)
+    mask = delta > 0.0
+    safe_delta = np.where(mask, delta, 1.0)
+    hue = np.where((maxc == r) & mask, ((g - b) / safe_delta) % 6.0, hue)
+    hue = np.where((maxc == g) & mask, ((b - r) / safe_delta) + 2.0, hue)
+    hue = np.where((maxc == b) & mask, ((r - g) / safe_delta) + 4.0, hue)
+    hue = hue / 6.0
+    return np.stack([hue, saturation, lightness], axis=-1).astype(np.float32)
+
+
+def _hsl_to_rgb(hsl: np.ndarray) -> np.ndarray:
+    """Vectorized HSL to RGB conversion for float arrays."""
+    hue = hsl[..., 0] % 1.0
+    saturation = np.clip(hsl[..., 1], 0.0, 1.0)
+    lightness = np.clip(hsl[..., 2], 0.0, 1.0)
+    chroma = (1.0 - np.abs(2.0 * lightness - 1.0)) * saturation
+    h = hue * 6.0
+    x = chroma * (1.0 - np.abs((h % 2.0) - 1.0))
+    zeros = np.zeros_like(h)
+    rgb_prime = np.zeros(hsl.shape, dtype=np.float32)
+
+    choices = [
+        np.stack([chroma, x, zeros], axis=-1),
+        np.stack([x, chroma, zeros], axis=-1),
+        np.stack([zeros, chroma, x], axis=-1),
+        np.stack([zeros, x, chroma], axis=-1),
+        np.stack([x, zeros, chroma], axis=-1),
+        np.stack([chroma, zeros, x], axis=-1),
+    ]
+    sector = np.floor(h).astype(int) % 6
+    for index, choice in enumerate(choices):
+        rgb_prime[sector == index] = choice[sector == index]
+    m = lightness - chroma * 0.5
+    return np.clip(rgb_prime + m[..., np.newaxis], 0.0, 1.0).astype(np.float32)
 
 
 def _pixels_from_backend_response(response: dict[str, Any]) -> np.ndarray:
@@ -3129,39 +3322,50 @@ def _rect_mask(width: int, height: int, bbox: Any) -> np.ndarray:
 
 def _color_range_mask(
     pixels: np.ndarray,
-    color: tuple[float, float, float, float],
-    tolerance: float,
+    params: dict[str, Any],
     alpha_min: float,
 ) -> np.ndarray:
-    """Select pixels whose RGB values are within `tolerance` of `color`."""
+    """Select pixels whose colors are close to explicit colors or sampled seed colors."""
     if pixels.ndim != 3 or pixels.shape[2] != 4:
         raise ValueError("pixel arrays must have shape H x W x 4")
-    if tolerance < 0.0:
-        raise ValueError("tolerance must be nonnegative")
     if alpha_min < 0.0 or alpha_min > 1.0:
         raise ValueError("alpha_min must be in [0, 1]")
-    target = np.asarray(color[:3], dtype=np.float32)
-    distance = np.linalg.norm(pixels[..., :3] - target, axis=-1)
-    data = (distance <= tolerance) & (pixels[..., 3] >= alpha_min)
+    targets = _selection_target_colors(pixels, params)
+    data = _color_similarity_mask(pixels, targets, params) & (pixels[..., 3] >= alpha_min)
+    exclude_points = params.get("exclude_seed_points", [])
+    if exclude_points:
+        exclude_targets = np.asarray(_seed_target_colors(pixels, exclude_points), dtype=np.float32)
+        data &= ~_exclude_color_similarity_mask(pixels, exclude_targets, params)
     return data.astype(np.float32)
 
 
 def _magic_wand_mask(
     pixels: np.ndarray,
     seed_points: list[Any],
-    tolerance: float,
+    params: dict[str, Any],
     alpha_min: float,
     diagonal: bool,
+    bbox_xyxy: Any | None = None,
 ) -> np.ndarray:
     """Select contiguous regions close to the color under each seed point."""
     if pixels.ndim != 3 or pixels.shape[2] != 4:
         raise ValueError("pixel arrays must have shape H x W x 4")
-    if tolerance < 0.0:
-        raise ValueError("tolerance must be nonnegative")
     if alpha_min < 0.0 or alpha_min > 1.0:
         raise ValueError("alpha_min must be in [0, 1]")
     height, width = pixels.shape[:2]
     selected = np.zeros((height, width), dtype=bool)
+    allowed = pixels[..., 3] >= alpha_min
+    if bbox_xyxy is not None:
+        bbox_mask = np.zeros((height, width), dtype=bool)
+        x0, y0, x1, y1 = _bbox_to_ints(bbox_xyxy, width, height)
+        bbox_mask[y0:y1, x0:x1] = True
+        allowed &= bbox_mask
+    exclude_points = params.get("exclude_seed_points", [])
+    if exclude_points:
+        exclude_targets = np.asarray(_seed_target_colors(pixels, exclude_points), dtype=np.float32)
+        allowed &= ~_exclude_color_similarity_mask(pixels, exclude_targets, params)
+    edge_stop_threshold = params.get("edge_stop_threshold")
+    edge_stop = None if edge_stop_threshold is None else float(edge_stop_threshold)
     neighbors = (
         [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
         if diagonal
@@ -3170,9 +3374,8 @@ def _magic_wand_mask(
 
     for point in seed_points:
         x, y = _point_to_ints(point, width, height)
-        target = pixels[y, x, :3]
-        distance = np.linalg.norm(pixels[..., :3] - target, axis=-1)
-        candidate = (distance <= tolerance) & (pixels[..., 3] >= alpha_min)
+        target = pixels[y, x, :3][np.newaxis, :]
+        candidate = _color_similarity_mask(pixels, target, params) & allowed
         if not bool(candidate[y, x]) or bool(selected[y, x]):
             continue
 
@@ -3187,10 +3390,212 @@ def _magic_wand_mask(
                     continue
                 if selected[next_y, next_x] or not candidate[next_y, next_x]:
                     continue
+                if edge_stop is not None and _crosses_rgb_edge(pixels, current_x, current_y, next_x, next_y, edge_stop):
+                    continue
                 selected[next_y, next_x] = True
                 queue.append((next_x, next_y))
 
     return selected.astype(np.float32)
+
+
+def _seeded_object_mask(pixels: np.ndarray, params: dict[str, Any], alpha_min: float) -> np.ndarray:
+    """Create an object-like mask from positive and optional negative seed colors."""
+    if pixels.ndim != 3 or pixels.shape[2] != 4:
+        raise ValueError("pixel arrays must have shape H x W x 4")
+    if alpha_min < 0.0 or alpha_min > 1.0:
+        raise ValueError("alpha_min must be in [0, 1]")
+    positive_points = params.get("positive_seed_points", params.get("seed_points"))
+    if not positive_points:
+        raise ValueError("seeded object selection requires positive_seed_points or seed_points")
+
+    height, width = pixels.shape[:2]
+    allowed = pixels[..., 3] >= alpha_min
+    if "bbox_xyxy" in params:
+        bbox_mask = np.zeros((height, width), dtype=bool)
+        x0, y0, x1, y1 = _bbox_to_ints(params["bbox_xyxy"], width, height)
+        bbox_mask[y0:y1, x0:x1] = True
+        allowed &= bbox_mask
+
+    comparison_params = dict(params)
+    if comparison_params.get("color_space", "rgb") == "rgb" and "tolerance" not in comparison_params:
+        comparison_params["tolerance"] = 0.18
+    positive_targets = np.asarray(_seed_target_colors(pixels, positive_points), dtype=np.float32)
+    candidate = _color_similarity_mask(pixels, positive_targets, comparison_params) & allowed
+
+    negative_points = params.get("negative_seed_points", [])
+    if negative_points:
+        negative_targets = np.asarray(_seed_target_colors(pixels, negative_points), dtype=np.float32)
+        positive_distance = _color_distance_to_targets(pixels, positive_targets, comparison_params)
+        negative_distance = _color_distance_to_targets(pixels, negative_targets, comparison_params)
+        margin = float(params.get("negative_margin", 0.0))
+        candidate &= positive_distance + margin <= negative_distance
+        for point in negative_points:
+            x, y = _point_to_ints(point, width, height)
+            candidate[y, x] = False
+
+    edge_stop_threshold = params.get("edge_stop_threshold")
+    edge_stop = None if edge_stop_threshold is None else float(edge_stop_threshold)
+    diagonal = bool(params.get("diagonal", True))
+    neighbors = (
+        [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+        if diagonal
+        else [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    )
+    selected = np.zeros((height, width), dtype=bool)
+    queue: deque[tuple[int, int]] = deque()
+    for point in positive_points:
+        x, y = _point_to_ints(point, width, height)
+        if bool(candidate[y, x]) and not bool(selected[y, x]):
+            selected[y, x] = True
+            queue.append((x, y))
+
+    while queue:
+        current_x, current_y = queue.popleft()
+        for dx, dy in neighbors:
+            next_x = current_x + dx
+            next_y = current_y + dy
+            if next_x < 0 or next_y < 0 or next_x >= width or next_y >= height:
+                continue
+            if selected[next_y, next_x] or not candidate[next_y, next_x]:
+                continue
+            if edge_stop is not None and _crosses_rgb_edge(pixels, current_x, current_y, next_x, next_y, edge_stop):
+                continue
+            selected[next_y, next_x] = True
+            queue.append((next_x, next_y))
+
+    return selected.astype(np.float32)
+
+
+def _crosses_rgb_edge(pixels: np.ndarray, x0: int, y0: int, x1: int, y1: int, threshold: float) -> bool:
+    """Return whether adjacent pixels differ by more than a normalized RGB threshold."""
+    if threshold <= 0.0:
+        return True
+    distance = float(np.linalg.norm(pixels[y1, x1, :3] - pixels[y0, x0, :3]))
+    return distance > threshold
+
+
+def _selection_target_colors(pixels: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return RGB target colors from params.color plus any sampled seed points."""
+    targets: list[np.ndarray] = []
+    if "color" in params:
+        targets.append(np.asarray(_parse_color(params["color"])[:3], dtype=np.float32))
+    if params.get("seed_points"):
+        targets.extend(_seed_target_colors(pixels, params["seed_points"]))
+    if not targets:
+        raise ValueError("selection requires params.color or params.seed_points")
+    return np.asarray(targets, dtype=np.float32)
+
+
+def _fringe_target_colors(pixels: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return RGB target colors for local old-material fringe cleanup."""
+    targets: list[np.ndarray] = []
+    for color in params.get("old_colors", []):
+        targets.append(np.asarray(_parse_color(color)[:3], dtype=np.float32))
+    if params.get("seed_points"):
+        targets.extend(_seed_target_colors(pixels, params["seed_points"]))
+    if not targets:
+        raise ValueError("cleanup_fringe requires params.old_colors or params.seed_points")
+    return np.asarray(targets, dtype=np.float32)
+
+
+def _fringe_color_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Return color-match parameters tuned for local antialias/fringe pixels."""
+    comparison = dict(params)
+    comparison.setdefault("color_space", "hsv")
+    if comparison["color_space"] == "hsv":
+        comparison.setdefault("hue_tolerance_degrees", 35.0)
+        comparison.setdefault("saturation_tolerance", 0.65)
+        comparison.setdefault("value_tolerance", 0.85)
+    else:
+        comparison.setdefault("tolerance", 0.25)
+    return comparison
+
+
+def _seed_target_colors(pixels: np.ndarray, seed_points: list[Any]) -> list[np.ndarray]:
+    """Sample RGB colors from seed points."""
+    height, width = pixels.shape[:2]
+    colors: list[np.ndarray] = []
+    for point in seed_points:
+        x, y = _point_to_ints(point, width, height)
+        colors.append(np.asarray(pixels[y, x, :3], dtype=np.float32))
+    return colors
+
+
+def _color_distance_to_targets(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return the minimum color distance from every pixel to any target color."""
+    if targets.size == 0:
+        return np.full(pixels.shape[:2], np.inf, dtype=np.float32)
+    color_space = str(params.get("color_space", "rgb")).lower()
+    if color_space == "rgb":
+        distance = np.linalg.norm(pixels[..., :3, np.newaxis] - targets.T[np.newaxis, np.newaxis, :, :], axis=2)
+        return np.min(distance, axis=-1).astype(np.float32)
+    if color_space == "hsv":
+        pixel_hsv = _rgb_to_hsv(pixels[..., :3])
+        target_hsv = _rgb_to_hsv(targets.reshape((1, targets.shape[0], 3)))[0]
+        hue_diff = np.abs(pixel_hsv[..., 0, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 0])
+        hue_diff = np.minimum(hue_diff, 1.0 - hue_diff)
+        saturation_diff = np.abs(pixel_hsv[..., 1, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 1])
+        value_diff = np.abs(pixel_hsv[..., 2, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 2])
+        distance = np.sqrt(hue_diff * hue_diff + saturation_diff * saturation_diff + value_diff * value_diff)
+        return np.min(distance, axis=-1).astype(np.float32)
+    raise ValueError("params.color_space must be 'rgb' or 'hsv'")
+
+
+def _color_similarity_mask(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return pixels close to any target color in RGB or HSV space."""
+    if targets.size == 0:
+        return np.zeros(pixels.shape[:2], dtype=bool)
+    color_space = str(params.get("color_space", "rgb")).lower()
+    if color_space == "rgb":
+        tolerance = _selection_tolerance(params)
+        distance = np.linalg.norm(pixels[..., :3, np.newaxis] - targets.T[np.newaxis, np.newaxis, :, :], axis=2)
+        return np.any(distance <= tolerance, axis=-1)
+    if color_space == "hsv":
+        pixel_hsv = _rgb_to_hsv(pixels[..., :3])
+        target_hsv = _rgb_to_hsv(targets.reshape((1, targets.shape[0], 3)))[0]
+        tolerance = float(params.get("tolerance", 0.0))
+        if tolerance < 0.0:
+            raise ValueError("tolerance must be nonnegative")
+        hue_tolerance = float(params.get("hue_tolerance_degrees", tolerance * 360.0 if "tolerance" in params else 30.0)) / 360.0
+        saturation_tolerance = float(params.get("saturation_tolerance", tolerance if "tolerance" in params else 0.35))
+        value_tolerance = float(params.get("value_tolerance", tolerance if "tolerance" in params else 0.35))
+        if hue_tolerance < 0.0 or saturation_tolerance < 0.0 or value_tolerance < 0.0:
+            raise ValueError("HSV tolerances must be nonnegative")
+        hue_diff = np.abs(pixel_hsv[..., 0, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 0])
+        hue_diff = np.minimum(hue_diff, 1.0 - hue_diff)
+        saturation_diff = np.abs(pixel_hsv[..., 1, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 1])
+        value_diff = np.abs(pixel_hsv[..., 2, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 2])
+        return np.any(
+            (hue_diff <= hue_tolerance)
+            & (saturation_diff <= saturation_tolerance)
+            & (value_diff <= value_tolerance),
+            axis=-1,
+        )
+    raise ValueError("params.color_space must be 'rgb' or 'hsv'")
+
+
+def _exclude_color_similarity_mask(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return a stricter color match for subtractive exclude seeds."""
+    exclude_params = dict(params)
+    if "tolerance" in exclude_params:
+        exclude_params["tolerance"] = float(exclude_params["tolerance"]) * 0.5
+    if "hue_tolerance_degrees" in exclude_params:
+        exclude_params["hue_tolerance_degrees"] = float(exclude_params["hue_tolerance_degrees"]) * 0.5
+    if "saturation_tolerance" in exclude_params:
+        exclude_params["saturation_tolerance"] = float(exclude_params["saturation_tolerance"]) * 0.5
+    if "value_tolerance" in exclude_params:
+        exclude_params["value_tolerance"] = float(exclude_params["value_tolerance"]) * 0.5
+    return _color_similarity_mask(pixels, targets, exclude_params)
+
+
+def _selection_tolerance(params: dict[str, Any]) -> float:
+    """Return the normalized RGB tolerance for color selection."""
+    if "tolerance" not in params:
+        raise ValueError("params.tolerance is required for RGB color selection")
+    tolerance = float(params["tolerance"])
+    if tolerance < 0.0:
+        raise ValueError("tolerance must be nonnegative")
+    return tolerance
 
 
 def _point_to_ints(point: Any, width: int, height: int) -> tuple[int, int]:

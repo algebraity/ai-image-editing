@@ -4,6 +4,7 @@ These tests intentionally exercise the same path a prototype planner will use:
 canonical action JSON is parsed into an `ActionBatch`, actions are executed by
 the runtime, validation reports and document snapshots are written to a trace,
 and exported preview images are left in `tests/artifacts` for manual inspection.
+and exported preview images are left in `artifacts/tests` for manual inspection.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from ai_edit_kernel.schema.actions import ActionBatch, ActionResult, ActionStatu
 from ai_edit_kernel.trace.trace_logger import TraceLogger
 
 
-ARTIFACT_ROOT = Path(__file__).resolve().parent / "artifacts"
+ARTIFACT_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "tests" / "non_ai_stack"
 CUTE_ROOT = Path(__file__).resolve().parent / "cute"
 VECTOR_ROOT = Path(__file__).resolve().parent / "vector"
 
@@ -1121,7 +1122,238 @@ class NonAIStackTests(unittest.TestCase):
         self.assertGreater(float(doc.get_layer("layer_paint").pixels[..., 3].max()), 0.0)
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
 
-    def test_42_clipboard_perception_and_object_layer_tools(self) -> None:
+    def test_42_hsv_seed_selection_and_hue_preserving_recolor(self) -> None:
+        """Select separated bow-like color islands with HSV seeds and recolor them safely."""
+        case_name = "test_42_hsv_seed_selection_and_hue_preserving_recolor"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 80, 70),
+            create_layer("action_002", "layer_art", "synthetic bow", color="#00000000"),
+            draw_shape("action_003", "layer_art", rectangle([5, 5, 55, 15]), write_mask_id="mask_full_canvas", fill={"color": "#f45a91"}),
+            draw_shape("action_004", "layer_art", rectangle([12, 22, 32, 42]), write_mask_id="mask_full_canvas", fill={"color": "#f45a91"}),
+            draw_shape("action_005", "layer_art", rectangle([48, 22, 68, 42]), write_mask_id="mask_full_canvas", fill={"color": "#f36a9b"}),
+            draw_shape("action_006", "layer_art", rectangle([24, 34, 56, 48]), write_mask_id="mask_full_canvas", fill={"color": "#98265d"}),
+            draw_shape("action_007", "layer_art", rectangle([14, 50, 34, 62]), write_mask_id="mask_full_canvas", fill={"color": "#f7aa9d"}),
+            draw_shape("action_008", "layer_art", rectangle([38, 25, 45, 35]), write_mask_id="mask_full_canvas", fill={"color": "#1660d8"}),
+            action(
+                "action_009",
+                "magic_wand_select",
+                params={
+                    "name": "bounded wand",
+                    "seed_points": [[10, 10]],
+                    "tolerance": 0.02,
+                    "bbox_xyxy": [5, 5, 30, 15],
+                    "alpha_min": 0.9,
+                    "diagonal": True,
+                    "set_active": False,
+                },
+                target={"layer_id": "layer_art", "mask_id": "mask_bar_bounded"},
+            ),
+            action(
+                "action_010",
+                "select_color_range",
+                params={
+                    "name": "bow material",
+                    "seed_points": [[18, 28]],
+                    "exclude_seed_points": [[40, 30], [18, 55]],
+                    "bbox_xyxy": [10, 20, 72, 50],
+                    "color_space": "hsv",
+                    "hue_tolerance_degrees": 18,
+                    "saturation_tolerance": 0.45,
+                    "value_tolerance": 0.45,
+                    "alpha_min": 0.9,
+                    "set_active": False,
+                },
+                target={"layer_id": "layer_art", "mask_id": "mask_bow_raw"},
+            ),
+            action(
+                "action_011",
+                "refine_selection",
+                params={"source_mask_id": "mask_bow_raw", "name": "bow clean", "min_area": 8, "fill_holes": True, "smooth_radius": 0.25},
+                target={"mask_id": "mask_bow_clean"},
+            ),
+            action(
+                "action_012",
+                "colorize",
+                params={"color": "#8a2be2", "method": "set_hue_preserve_lightness", "amount": 1.0},
+                target={"layer_id": "layer_art"},
+                write_mask_id="mask_bow_clean",
+            ),
+            export_flat("action_013", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 80, 70, actions)
+
+        self.assert_all_succeeded(results)
+        bounded = doc.get_mask("mask_bar_bounded").data
+        bow = doc.get_mask("mask_bow_clean").data
+        pixels = doc.get_layer("layer_art").pixels
+        self.assertGreater(bounded[10, 10], 0.9)
+        self.assertLess(bounded[10, 40], 0.1)
+        self.assertGreater(bow[28, 18], 0.9)
+        self.assertGreater(bow[30, 58], 0.9)
+        self.assertGreater(bow[40, 40], 0.9)
+        self.assertLess(bow[30, 40], 0.1)
+        self.assertLess(bow[55, 18], 0.1)
+        self.assertGreater(pixels[30, 58, 2], pixels[30, 58, 1])
+        self.assert_color_close(pixels[55, 18], [0xF7 / 255.0, 0xAA / 255.0, 0x9D / 255.0, 1.0], tolerance=0.02)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_42b_edge_seeded_object_repair_and_material_recolor(self) -> None:
+        """Use edge-aware seeds, mask repair, and material recolor on adjacent regions."""
+        case_name = "test_42b_edge_seeded_object_repair_and_material_recolor"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 80, 60),
+            create_layer("action_002", "layer_art", "synthetic hair", color="#00000000"),
+            draw_shape("action_003", "layer_art", rectangle([8, 8, 44, 38]), write_mask_id="mask_full_canvas", fill={"color": "#e5ad39"}),
+            draw_shape("action_004", "layer_art", rectangle([44, 8, 68, 38]), write_mask_id="mask_full_canvas", fill={"color": "#f4d39a"}),
+            draw_shape("action_005", "layer_art", rectangle([12, 38, 22, 56]), write_mask_id="mask_full_canvas", fill={"color": "#c27a24"}),
+            draw_shape("action_006", "layer_art", rectangle([30, 12, 38, 18]), write_mask_id="mask_full_canvas", fill={"color": "#fff0a8"}),
+            draw_shape("action_007", "layer_art", rectangle([24, 24, 28, 28]), write_mask_id="mask_full_canvas", fill={"color": "#00000000"}),
+            action(
+                "action_008",
+                "magic_wand_select",
+                params={
+                    "name": "edge-aware hair mass",
+                    "seed_points": [[14, 14]],
+                    "tolerance": 0.45,
+                    "edge_stop_threshold": 0.20,
+                    "bbox_xyxy": [6, 6, 70, 58],
+                    "alpha_min": 0.0,
+                    "diagonal": True,
+                    "set_active": False,
+                },
+                target={"layer_id": "layer_art", "mask_id": "mask_edge_hair"},
+            ),
+            action(
+                "action_009",
+                "segment_object",
+                params={
+                    "name": "seeded hair object",
+                    "positive_seed_points": [[14, 14], [16, 46], [34, 14]],
+                    "negative_seed_points": [[52, 20]],
+                    "tolerance": 0.50,
+                    "negative_margin": 0.02,
+                    "edge_stop_threshold": 0.22,
+                    "bbox_xyxy": [6, 6, 70, 58],
+                    "diagonal": True,
+                    "set_active": False,
+                },
+                target={"layer_id": "layer_art", "mask_id": "mask_seeded_hair"},
+            ),
+            action(
+                "action_010",
+                "refine_selection",
+                params={
+                    "source_mask_id": "mask_seeded_hair",
+                    "name": "repaired hair mask",
+                    "close_pixels": 1,
+                    "fill_holes": True,
+                    "max_hole_area": 20,
+                    "smooth_radius": 0.25,
+                    "feather_radius": 0.15,
+                    "set_active": False,
+                },
+                target={"mask_id": "mask_hair_repaired"},
+            ),
+            action(
+                "action_011",
+                "colorize",
+                params={"color": "#6b3d1d", "method": "material_hsl", "amount": 1.0, "contrast": 1.1},
+                target={"layer_id": "layer_art"},
+                write_mask_id="mask_hair_repaired",
+            ),
+            export_flat("action_012", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 80, 60, actions)
+
+        self.assert_all_succeeded(results)
+        edge = doc.get_mask("mask_edge_hair").data
+        repaired = doc.get_mask("mask_hair_repaired").data
+        pixels = doc.get_layer("layer_art").pixels
+        self.assertGreater(edge[14, 14], 0.9)
+        self.assertLess(edge[20, 52], 0.1)
+        self.assertGreater(repaired[14, 14], 0.9)
+        self.assertGreater(repaired[26, 26], 0.9)
+        self.assertLess(repaired[20, 52], 0.1)
+        self.assertGreater(pixels[16, 34, 0], pixels[16, 34, 2])
+        self.assertGreater(float(np.sum(pixels[16, 34, :3])), float(np.sum(pixels[46, 16, :3])))
+        self.assert_color_close(pixels[20, 52], [0xF4 / 255.0, 0xD3 / 255.0, 0x9A / 255.0, 1.0], tolerance=0.03)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_42c_anime_line_art_and_fringe_cleanup(self) -> None:
+        """Protect ink lines and recover local old-color fringe around a 2D recolor mask."""
+        case_name = "test_42c_anime_line_art_and_fringe_cleanup"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 90, 64),
+            create_layer("action_002", "layer_art", "synthetic anime hair", color="#f1cfd6"),
+            draw_shape("action_003", "layer_art", rectangle([20, 12, 50, 44]), write_mask_id="mask_full_canvas", fill={"color": "#e5ad39"}),
+            draw_shape("action_004", "layer_art", rectangle([50, 12, 53, 44]), write_mask_id="mask_full_canvas", fill={"color": "#f0c980"}),
+            draw_shape("action_005", "layer_art", rectangle([53, 12, 55, 44]), write_mask_id="mask_full_canvas", fill={"color": "#100806"}),
+            draw_shape("action_006", "layer_art", rectangle([68, 16, 74, 24]), write_mask_id="mask_full_canvas", fill={"color": "#f0c980"}),
+            action(
+                "action_007",
+                "select_color_range",
+                params={
+                    "name": "core blonde hair",
+                    "color": "#e5ad39",
+                    "tolerance": 0.03,
+                    "bbox_xyxy": [18, 10, 58, 48],
+                    "alpha_min": 0.9,
+                    "set_active": False,
+                },
+                target={"layer_id": "layer_art", "mask_id": "mask_hair_core"},
+            ),
+            action(
+                "action_008",
+                "extract_line_art",
+                params={"mode": "ink", "threshold": 0.12, "name": "ink protection", "set_active": False},
+                target={"layer_id": "layer_art", "mask_id": "mask_line_art"},
+            ),
+            action(
+                "action_009",
+                "cleanup_fringe",
+                params={
+                    "source_mask_id": "mask_hair_core",
+                    "name": "hair with local fringe",
+                    "search_radius": 4,
+                    "old_colors": ["#e5ad39", "#f0c980"],
+                    "protect_mask_ids": ["mask_line_art"],
+                    "bbox_xyxy": [18, 10, 58, 48],
+                    "color_space": "hsv",
+                    "hue_tolerance_degrees": 30,
+                    "saturation_tolerance": 0.7,
+                    "value_tolerance": 0.8,
+                    "set_active": False,
+                },
+                target={"layer_id": "layer_art", "mask_id": "mask_hair_write"},
+            ),
+            action(
+                "action_010",
+                "colorize",
+                params={"color": "#6b3d1d", "method": "material_hsl", "amount": 1.0, "contrast": 1.05},
+                target={"layer_id": "layer_art"},
+                write_mask_id="mask_hair_write",
+            ),
+            export_flat("action_011", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 90, 64, actions)
+
+        self.assert_all_succeeded(results)
+        hair = doc.get_mask("mask_hair_write").data
+        lines = doc.get_mask("mask_line_art").data
+        pixels = doc.get_layer("layer_art").pixels
+        self.assertGreater(hair[20, 25], 0.9)
+        self.assertGreater(hair[20, 51], 0.9)
+        self.assertLess(hair[20, 54], 0.1)
+        self.assertLess(hair[18, 70], 0.1)
+        self.assertGreater(lines[20, 54], 0.9)
+        self.assertLess(lines[20, 51], 0.1)
+        self.assertGreater(pixels[20, 25, 0], pixels[20, 25, 2])
+        self.assertGreater(pixels[20, 51, 0], pixels[20, 51, 2])
+        self.assert_color_close(pixels[20, 54], [0x10 / 255.0, 0x08 / 255.0, 0x06 / 255.0, 1.0], tolerance=0.02)
+        self.assert_color_close(pixels[18, 70], [0xF0 / 255.0, 0xC9 / 255.0, 0x80 / 255.0, 1.0], tolerance=0.02)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
+    def test_43_clipboard_perception_and_object_layer_tools(self) -> None:
         """Exercise clipboard actions, shadow creation, and deterministic perception helpers."""
         case_name = "test_42_clipboard_perception_and_object_layer_tools"
         actions = [
@@ -1150,7 +1382,7 @@ class NonAIStackTests(unittest.TestCase):
         self.assertIn("observations", doc.annotations)
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
 
-    def test_43_diffusion_backend_bridge_actions(self) -> None:
+    def test_44_diffusion_backend_bridge_actions(self) -> None:
         """Exercise diffusion bridge actions with a deterministic fake backend."""
 
         class FakeBackend:
@@ -1191,7 +1423,7 @@ class NonAIStackTests(unittest.TestCase):
         self.assertIn("layer_img", [layer.id for layer in document.layers])
         self.assertGreater(float(document.get_layer("layer_base").pixels[..., 2].mean()), 0.9)
 
-    def test_44_new_document_and_layered_bundle_export(self) -> None:
+    def test_45_new_document_and_layered_bundle_export(self) -> None:
         """Reset a document in place and export a complete layered directory bundle."""
         case_name = "test_44_new_document_and_layered_bundle_export"
         bundle_path = self.export_path(case_name, "bundle")
@@ -1244,7 +1476,7 @@ class NonAIStackTests(unittest.TestCase):
         self.assertTrue((bundle_path / manifest["masks"][0]["data"]["path"]).exists())
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
 
-    def test_45_planner_catalog_covers_every_action(self) -> None:
+    def test_46_planner_catalog_covers_every_action(self) -> None:
         """Expose a machine-readable planner schema for every action type."""
         specs = available_action_specs()
         names = {item["name"] for item in specs}
@@ -1256,7 +1488,7 @@ class NonAIStackTests(unittest.TestCase):
         self.assertIn("shape", draw_shape_spec["planner_schema"]["properties"]["params"]["properties"])
         self.assertIn("kernel_filled_fields", draw_shape_spec)
 
-    def test_46_ai_planner_normalizes_executes_and_traces_minimal_output(self) -> None:
+    def test_47_ai_planner_normalizes_executes_and_traces_minimal_output(self) -> None:
         """Turn LLM-light planner output into executable actions and trace it."""
         case_name = "test_46_ai_planner_normalizes_executes_and_traces_minimal_output"
         test_dir = ARTIFACT_ROOT / case_name
@@ -1323,7 +1555,7 @@ class NonAIStackTests(unittest.TestCase):
         self.assertIn("planner_output_raw", event_types)
         self.assertIn("action_batch_planned", event_types)
 
-    def test_47_ai_planner_retries_invalid_schema_output(self) -> None:
+    def test_48_ai_planner_retries_invalid_schema_output(self) -> None:
         """Feed normalization errors back into the next planner request."""
         document = DocumentState(id="doc_planner_retry", canvas=CanvasSpec(width=16, height=16))
         backend = StaticPlannerBackend(
