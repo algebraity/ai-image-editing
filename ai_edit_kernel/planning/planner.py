@@ -23,6 +23,7 @@ from ai_edit_kernel.schema.actions import (
     ExpectedResult,
 )
 from ai_edit_kernel.schema.actions import ActionType
+from ai_edit_kernel.text import FontRegistry
 
 from .action_catalog import (
     PLANNER_CATALOG_VERSION,
@@ -115,6 +116,9 @@ class PlannerRequestBuilder:
     """Build the JSON object sent to a planner backend."""
 
     include_action_schemas: bool = True
+    include_font_catalog: bool = True
+    font_catalog_limit: int = 80
+    font_registry: Optional[FontRegistry] = None
 
     def build(
         self,
@@ -139,6 +143,7 @@ class PlannerRequestBuilder:
             "asset_refs": {} if asset_refs is None else dict(asset_refs),
             "tool_catalog_version": PLANNER_CATALOG_VERSION,
             "available_actions": available_action_specs() if self.include_action_schemas else [],
+            **({"font_catalog": self._font_catalog()} if self.include_font_catalog else {}),
             "output_contract": planner_output_schema(),
             "previous_errors": [] if previous_errors is None else list(previous_errors),
             "constraints": [
@@ -147,9 +152,15 @@ class PlannerRequestBuilder:
                 "Use existing layer and mask IDs from document_summary when targeting existing objects.",
                 "Provide a semantic output_layer_id or mask_id only when later actions need to reference it.",
                 "Use bbox_xyxy coordinates as half-open pixel bounds: [x0, y0, x1, y1].",
+                "When planning text, prefer font_id values from font_catalog instead of font paths or invented font names.",
             ],
             "metadata": {} if metadata is None else dict(metadata),
         }
+
+    def _font_catalog(self) -> JsonObject:
+        """Return the cached font catalog included in planner requests."""
+        registry = self.font_registry if self.font_registry is not None else FontRegistry.default()
+        return registry.catalog(limit=self.font_catalog_limit, include_paths=False)
 
 
 @dataclass(slots=True)

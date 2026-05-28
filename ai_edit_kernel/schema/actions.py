@@ -1354,29 +1354,123 @@ def _validate_text_action(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
         "params",
-        {"text", "name", "x", "y", "font_path", "font_size", "color", "anchor", "align", "spacing", "set_active"},
+        {
+            "text",
+            "name",
+            "x",
+            "y",
+            "font",
+            "font_id",
+            "font_path",
+            "font_family",
+            "font_style",
+            "font_weight",
+            "font_size",
+            "style",
+            "color",
+            "outline",
+            "outline_color",
+            "outline_width",
+            "stroke_color",
+            "stroke_width",
+            "layout",
+            "anchor",
+            "align",
+            "spacing",
+            "set_active",
+        },
     )
     if action.type == ActionType.CREATE_TEXT_LAYER:
         _require_target_id(action.target.output_layer_id, "target.output_layer_id")
     else:
         _require_target_id(action.target.layer_id, "target.layer_id")
-    if action.type != ActionType.RASTERIZE_TEXT_LAYER:
+    if action.type == ActionType.CREATE_TEXT_LAYER:
         _required_string(action.params, "text", "params.text")
+    elif action.type == ActionType.EDIT_TEXT_LAYER and "text" in action.params:
+        _optional_string(action.params["text"], "params.text")
     if "name" in action.params:
         _optional_string(action.params["name"], "params.name")
     _integer_number(action.params.get("x", 0), "params.x")
     _integer_number(action.params.get("y", 0), "params.y")
+    if "font" in action.params:
+        _validate_text_font_object(action.params["font"], "params.font")
+    for key in ("font_id", "font_path", "font_family", "font_style"):
+        if key in action.params:
+            _optional_string(action.params[key], f"params.{key}")
+    if "font_weight" in action.params:
+        _positive_int(action.params["font_weight"], "params.font_weight")
     if "font_path" in action.params:
         _optional_string(action.params["font_path"], "params.font_path")
     _positive_int(action.params.get("font_size", 32), "params.font_size")
+    if "style" in action.params:
+        _validate_text_style_object(action.params["style"], "params.style")
     if "color" in action.params:
         _validate_color(action.params["color"], "params.color")
+    if "outline" in action.params:
+        _validate_text_outline_object(action.params["outline"], "params.outline")
+    for key in ("outline_color", "stroke_color"):
+        if key in action.params:
+            _validate_color(action.params[key], f"params.{key}")
+    for key in ("outline_width", "stroke_width"):
+        if key in action.params:
+            _nonnegative_number(action.params[key], f"params.{key}")
+    if "layout" in action.params:
+        _validate_text_layout_object(action.params["layout"], "params.layout")
     if "anchor" in action.params:
         _optional_string(action.params["anchor"], "params.anchor")
     if "align" in action.params:
         _optional_enum_string(action.params["align"], {"left", "center", "right"}, "params.align")
     _nonnegative_int(action.params.get("spacing", 0), "params.spacing")
     _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_text_font_object(value: Any, field_name: str) -> None:
+    font = _mapping_value(value, field_name)
+    _reject_unknown_keys(font, field_name, {"id", "path", "family", "style", "weight", "size"})
+    for key in ("id", "path", "family", "style"):
+        if key in font:
+            _optional_string(font[key], f"{field_name}.{key}")
+    if "weight" in font:
+        _positive_int(font["weight"], f"{field_name}.weight")
+    if "size" in font:
+        _positive_int(font["size"], f"{field_name}.size")
+
+
+def _validate_text_style_object(value: Any, field_name: str) -> None:
+    style = _mapping_value(value, field_name)
+    _reject_unknown_keys(style, field_name, {"color", "color_rgba", "outline"})
+    if "color" in style:
+        _validate_color(style["color"], f"{field_name}.color")
+    if "color_rgba" in style:
+        _validate_color(style["color_rgba"], f"{field_name}.color_rgba")
+    if "outline" in style:
+        _validate_text_outline_object(style["outline"], f"{field_name}.outline")
+
+
+def _validate_text_outline_object(value: Any, field_name: str) -> None:
+    outline = _mapping_value(value, field_name)
+    _reject_unknown_keys(outline, field_name, {"color", "color_rgba", "width"})
+    if "color" in outline:
+        _validate_color(outline["color"], f"{field_name}.color")
+    if "color_rgba" in outline:
+        _validate_color(outline["color_rgba"], f"{field_name}.color_rgba")
+    if "width" in outline:
+        _nonnegative_number(outline["width"], f"{field_name}.width")
+
+
+def _validate_text_layout_object(value: Any, field_name: str) -> None:
+    layout = _mapping_value(value, field_name)
+    _reject_unknown_keys(layout, field_name, {"x", "y", "anchor", "align", "spacing"})
+    if "x" in layout:
+        _integer_number(layout["x"], f"{field_name}.x")
+    if "y" in layout:
+        _integer_number(layout["y"], f"{field_name}.y")
+    if "anchor" in layout:
+        _optional_string(layout["anchor"], f"{field_name}.anchor")
+    if "align" in layout:
+        _optional_enum_string(layout["align"], {"left", "center", "right"}, f"{field_name}.align")
+    if "spacing" in layout:
+        _nonnegative_int(layout["spacing"], f"{field_name}.spacing")
 
 
 def _validate_perception_action(action: Action) -> None:

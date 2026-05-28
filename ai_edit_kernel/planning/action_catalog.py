@@ -256,6 +256,69 @@ BLEND_MODE = enum_field(("normal", "multiply", "screen", "overlay", "add", "subt
 RESAMPLE = enum_field(("nearest", "bilinear", "bicubic"), "Resampling method.")
 
 
+def _text_param_properties() -> dict[str, JsonObject]:
+    """Return planner-facing text params shared by create/edit actions."""
+    outline = object_field(
+        {
+            "color": COLOR,
+            "color_rgba": COLOR,
+            "width": number_field("Outline/stroke width in pixels.", minimum=0),
+        },
+        "Text outline settings.",
+    )
+    return {
+        "text": string_field("Text content."),
+        "name": string_field("Layer name."),
+        "x": integer_field("Canvas x coordinate.", default=0),
+        "y": integer_field("Canvas y coordinate.", default=0),
+        "font": object_field(
+            {
+                "id": string_field("Stable font ID from the kernel font registry."),
+                "path": string_field("Explicit font file path."),
+                "family": string_field("Font family lookup string."),
+                "style": string_field("Font style lookup string, such as Bold or Italic."),
+                "weight": integer_field("Font weight, such as 400 or 700.", minimum=1),
+                "size": integer_field("Font size in pixels.", minimum=1, default=32),
+            },
+            "Structured font request. Prefer id for reproducible plans.",
+        ),
+        "font_id": string_field("Stable font ID from the kernel font registry."),
+        "font_path": string_field("Explicit font file path."),
+        "font_family": string_field("Font family lookup string."),
+        "font_style": string_field("Font style lookup string."),
+        "font_weight": integer_field("Font weight, such as 400 or 700.", minimum=1),
+        "font_size": integer_field("Font size in pixels.", minimum=1, default=32),
+        "style": object_field(
+            {
+                "color": COLOR,
+                "color_rgba": COLOR,
+                "outline": outline,
+            },
+            "Structured text style settings.",
+        ),
+        "color": COLOR,
+        "outline": outline,
+        "outline_color": COLOR,
+        "outline_width": number_field("Outline width in pixels.", minimum=0),
+        "stroke_color": COLOR,
+        "stroke_width": number_field("Outline width in pixels.", minimum=0),
+        "layout": object_field(
+            {
+                "x": integer_field("Canvas x coordinate.", default=0),
+                "y": integer_field("Canvas y coordinate.", default=0),
+                "anchor": string_field("Pillow-style text anchor."),
+                "align": enum_field(("left", "center", "right"), "Text alignment."),
+                "spacing": integer_field("Line spacing.", minimum=0),
+            },
+            "Structured text placement settings.",
+        ),
+        "anchor": string_field("Pillow-style text anchor."),
+        "align": enum_field(("left", "center", "right"), "Text alignment."),
+        "spacing": integer_field("Line spacing.", minimum=0),
+        "set_active": bool_field("Make layer active.", default=True),
+    }
+
+
 def spec(
     action_type: ActionType,
     category: str,
@@ -948,10 +1011,7 @@ ACTION_TOOL_SPECS: dict[str, ActionToolSpec] = {
             ActionType.CREATE_TEXT_LAYER,
             "text",
             "Create a rasterized editable text layer.",
-            param_schema(
-                {"text": string_field("Text content."), "name": string_field("Layer name."), "x": integer_field("Canvas x coordinate.", default=0), "y": integer_field("Canvas y coordinate.", default=0), "font_path": string_field("Optional font path."), "font_size": integer_field("Font size.", minimum=1, default=32), "color": COLOR, "anchor": string_field("Text anchor."), "align": enum_field(("left", "center", "right"), "Text alignment."), "spacing": integer_field("Line spacing.", minimum=0), "set_active": bool_field("Make layer active.", default=True)},
-                required=("text",),
-            ),
+            param_schema(_text_param_properties(), required=("text",)),
             target_fields={"output_layer_id": TF.GENERATED},
         ),
         spec(ActionType.EDIT_TEXT_LAYER, "text", "Edit text layer metadata and rerender it.", target_fields={"layer_id": TF.REQUIRED}),
@@ -1050,19 +1110,7 @@ _DIFFUSION_PARAMS = param_schema(
     }
 )
 _TEXT_EDIT_PARAMS = param_schema(
-    {
-        "text": string_field("Text content."),
-        "name": string_field("Layer name."),
-        "x": integer_field("Canvas x coordinate.", default=0),
-        "y": integer_field("Canvas y coordinate.", default=0),
-        "font_path": string_field("Optional font path."),
-        "font_size": integer_field("Font size.", minimum=1, default=32),
-        "color": COLOR,
-        "anchor": string_field("Text anchor."),
-        "align": enum_field(("left", "center", "right"), "Text alignment."),
-        "spacing": integer_field("Line spacing.", minimum=0),
-        "set_active": bool_field("Make layer active.", default=True),
-    }
+    _text_param_properties()
 )
 
 

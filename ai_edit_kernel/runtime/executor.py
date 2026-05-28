@@ -42,6 +42,7 @@ from ai_edit_kernel.region import (
 )
 from ai_edit_kernel.runtime.validator import ValidationReport, Validator
 from ai_edit_kernel.schema.actions import Action, ActionBatch, ActionError, ActionResult, ActionStatus, ActionType
+from ai_edit_kernel.text import merge_text_params, render_text_pixels
 
 
 class DiffusionBackend(Protocol):
@@ -1485,13 +1486,13 @@ class Executor:
     def _execute_create_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Create a rasterized text layer with editable text metadata."""
         output_id = _required_target(action.target.output_layer_id, "target.output_layer_id")
-        pixels, metadata = _render_text_pixels(document.canvas.width, document.canvas.height, action.params)
+        result = render_text_pixels(document.canvas.width, document.canvas.height, action.params)
         layer = Layer(
             id=output_id,
             name=action.params.get("name", "Text"),
             kind=LayerKind.TEXT,
-            pixels=pixels,
-            metadata=metadata,
+            pixels=result.pixels,
+            metadata=result.metadata,
         )
         document.add_layer(layer)
         if action.params.get("set_active", True):
@@ -1501,12 +1502,11 @@ class Executor:
     def _execute_edit_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
         """Update text metadata and rerender the text layer."""
         layer = document.get_layer(_required_target(action.target.layer_id, "target.layer_id"))
-        params = dict(layer.metadata.get("text", {}))
-        params.update(action.params)
-        pixels, metadata = _render_text_pixels(document.canvas.width, document.canvas.height, params)
+        params = merge_text_params(dict(layer.metadata.get("text", {})), action.params)
+        result = render_text_pixels(document.canvas.width, document.canvas.height, params)
         layer.kind = LayerKind.TEXT
-        layer.pixels = pixels
-        layer.metadata.update(metadata)
+        layer.pixels = result.pixels
+        layer.metadata.update(result.metadata)
         return ActionResult(action_id=action.id, status=ActionStatus.EXECUTED, changed_layer_ids=[layer.id])
 
     def _execute_rasterize_text_layer(self, document: DocumentState, action: Action) -> ActionResult:
@@ -2285,34 +2285,6 @@ def _copy_region_pixels(document: DocumentState, layer: Layer, params: dict[str,
 def _paste_pixels(destination: np.ndarray, source: np.ndarray, x: int, y: int) -> None:
     """Paste cropped source pixels into full-canvas destination at x/y."""
     destination[..., :] = _region_paste_crop(destination, source, x, y)
-
-
-def _render_text_pixels(width: int, height: int, params: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
-    """Render text into a full-canvas RGBA layer and return text metadata."""
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-    except ImportError as exc:
-        raise RuntimeError("text rendering requires Pillow") from exc
-    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    font_size = int(params.get("font_size", 32))
-    font_path = params.get("font_path")
-    try:
-        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.truetype("DejaVuSans.ttf", font_size)
-    except OSError:
-        font = ImageFont.load_default()
-    color = tuple(int(round(channel * 255.0)) for channel in _parse_color(params.get("color", "#000000")))
-    draw.multiline_text(
-        (int(params.get("x", 0)), int(params.get("y", 0))),
-        params.get("text", ""),
-        fill=color,
-        font=font,
-        anchor=params.get("anchor"),
-        align=params.get("align", "left"),
-        spacing=int(params.get("spacing", 0)),
-    )
-    metadata = {"text": dict(params), "rasterized": True}
-    return (np.asarray(image, dtype=np.float32) / 255.0).astype(np.float32), metadata
 
 
 def _shape_observation_from_mask(mask: np.ndarray) -> dict[str, Any]:

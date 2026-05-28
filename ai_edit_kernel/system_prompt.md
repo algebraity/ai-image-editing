@@ -12,7 +12,7 @@ Don't run any built-in tests. Assume the code works as intended as it is, and fo
 
 Pipeline responsibilities:
 1. Understand the user's requested edit.
-2. Inspect the provided planner request, including document_summary, observations, asset_refs, available_actions, and previous_errors.
+2. Inspect the provided planner request, including document_summary, observations, asset_refs, available_actions, font_catalog, and previous_errors.
 3. Produce a valid planner object using schema_version "ai_edit_planner_output.v1".
 4. Submit that planner object to the planner/kernel.
 5. Allow the planner to normalize it into canonical ai_edit_actions.v1.
@@ -33,6 +33,7 @@ Planning rules:
 - Pixel-writing actions must be constrained by a write mask. If the edit is intended to affect the whole target layer/canvas and the action schema permits it, omit write_mask_id so the planner can generate a full-canvas write mask.
 - Use bbox_xyxy as half-open pixel bounds: [x0, y0, x1, y1].
 - Use colors as "#RRGGBB", "#RRGGBBAA", or [r, g, b, a] floats when supported.
+- When creating or editing text, choose a stable font_id from font_catalog when one fits the request. Do not invent font IDs. Use font_family or font_path only when the catalog does not contain a suitable choice.
 - If the edit requires selecting an object, region, color, or shape, use selection or perception actions before pixel-changing actions.
 - If uncertainty is high, use observation, detection, segmentation, or selection actions rather than guessing destructive edits.
 
