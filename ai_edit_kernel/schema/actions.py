@@ -77,6 +77,8 @@ class ActionType(str, Enum):
     SELECT_FROM_ALPHA = "select_from_alpha"
     SELECT_COLOR_RANGE = "select_color_range"
     MAGIC_WAND_SELECT = "magic_wand_select"
+    FUZZY_SELECT = "fuzzy_select"
+    SELECT_BY_COLOR = "select_by_color"
     SAVE_SELECTION_AS_MASK = "save_selection_as_mask"
     CREATE_MASK_FROM_SHAPE = "create_mask_from_shape"
     GROW_MASK = "grow_mask"
@@ -857,13 +859,56 @@ def _validate_select_ellipse(action: Action) -> None:
     _bool_value(action.params.get("set_active", True), "params.set_active")
 
 
+_GIMP_SELECT_CRITERIA = {
+    "composite",
+    "rgb-red",
+    "rgb-green",
+    "rgb-blue",
+    "hsv-hue",
+    "hsv-saturation",
+    "hsv-value",
+    "alpha",
+}
+
+
+_SELECTION_OPERATION_VALUES = {"replace", "add", "subtract", "intersect"}
+
+
+_COLOR_SELECTION_KEYS = {
+    "name",
+    "color",
+    "seed_points",
+    "exclude_seed_points",
+    "threshold",
+    "tolerance",
+    "bbox_xyxy",
+    "alpha_min",
+    "select_transparent",
+    "antialias",
+    "criterion",
+    "color_space",
+    "hue_tolerance_degrees",
+    "saturation_tolerance",
+    "value_tolerance",
+    "kind",
+    "set_active",
+}
+
+
+_FUZZY_SELECTION_KEYS = _COLOR_SELECTION_KEYS | {"diagonal", "clicks", "edge_stop_threshold"}
+
+
 def _validate_selection_color_options(params: dict[str, Any]) -> None:
     color_space = params.get("color_space", "rgb")
     _optional_enum_string(color_space, {"rgb", "hsv"}, "params.color_space")
+    if "criterion" in params:
+        _optional_enum_string(params["criterion"], _GIMP_SELECT_CRITERIA, "params.criterion")
+    if "threshold" in params:
+        _nonnegative_number(params["threshold"], "params.threshold")
+        if float(params["threshold"]) > 255.0:
+            raise ValueError("params.threshold must be at most 255")
     if "tolerance" in params:
         _nonnegative_number(params["tolerance"], "params.tolerance")
-    elif color_space == "rgb":
-        raise ValueError("params.tolerance is required when params.color_space is 'rgb'")
     if "hue_tolerance_degrees" in params:
         _nonnegative_number(params["hue_tolerance_degrees"], "params.hue_tolerance_degrees")
         if float(params["hue_tolerance_degrees"]) > 180.0:
@@ -872,27 +917,39 @@ def _validate_selection_color_options(params: dict[str, Any]) -> None:
         _optional_unit_number(params["saturation_tolerance"], "params.saturation_tolerance")
     if "value_tolerance" in params:
         _optional_unit_number(params["value_tolerance"], "params.value_tolerance")
+    if "select_transparent" in params:
+        _bool_value(params["select_transparent"], "params.select_transparent")
+    if "antialias" in params:
+        _bool_value(params["antialias"], "params.antialias")
+
+
+def _validate_selection_clicks(value: Any, field_name: str) -> None:
+    if not isinstance(value, list) or len(value) == 0:
+        raise TypeError(f"{field_name} must be a non-empty list")
+    allowed = {"point", "operation", "threshold", "tolerance"}
+    for index, click in enumerate(value):
+        if isinstance(click, (list, tuple)):
+            _point(click, f"{field_name}[{index}]")
+            continue
+        if not isinstance(click, dict):
+            raise TypeError(f"{field_name}[{index}] must be a point or object")
+        _reject_unknown_keys(click, f"{field_name}[{index}]", allowed)
+        _point(click.get("point"), f"{field_name}[{index}].point")
+        if "operation" in click:
+            _optional_enum_string(click["operation"], _SELECTION_OPERATION_VALUES, f"{field_name}[{index}].operation")
+        if "threshold" in click:
+            _nonnegative_number(click["threshold"], f"{field_name}[{index}].threshold")
+            if float(click["threshold"]) > 255.0:
+                raise ValueError(f"{field_name}[{index}].threshold must be at most 255")
+        if "tolerance" in click:
+            _nonnegative_number(click["tolerance"], f"{field_name}[{index}].tolerance")
 
 
 def _validate_select_color_range(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
         "params",
-        {
-            "name",
-            "color",
-            "seed_points",
-            "exclude_seed_points",
-            "tolerance",
-            "bbox_xyxy",
-            "alpha_min",
-            "color_space",
-            "hue_tolerance_degrees",
-            "saturation_tolerance",
-            "value_tolerance",
-            "kind",
-            "set_active",
-        },
+        _COLOR_SELECTION_KEYS,
     )
     _require_target_id(action.target.layer_id, "target.layer_id")
     _require_target_id(action.target.mask_id, "target.mask_id")
@@ -923,26 +980,16 @@ def _validate_magic_wand_select(action: Action) -> None:
     _reject_unknown_keys(
         action.params,
         "params",
-        {
-            "name",
-            "seed_points",
-            "exclude_seed_points",
-            "tolerance",
-            "bbox_xyxy",
-            "alpha_min",
-            "diagonal",
-            "color_space",
-            "hue_tolerance_degrees",
-            "saturation_tolerance",
-            "value_tolerance",
-            "edge_stop_threshold",
-            "kind",
-            "set_active",
-        },
+        _FUZZY_SELECTION_KEYS,
     )
     _require_target_id(action.target.layer_id, "target.layer_id")
     _require_target_id(action.target.mask_id, "target.mask_id")
-    _point_list(action.params.get("seed_points"), "params.seed_points")
+    if "seed_points" not in action.params and "clicks" not in action.params:
+        raise ValueError("magic_wand_select requires params.seed_points or params.clicks")
+    if "seed_points" in action.params:
+        _point_list(action.params["seed_points"], "params.seed_points")
+    if "clicks" in action.params:
+        _validate_selection_clicks(action.params["clicks"], "params.clicks")
     if "exclude_seed_points" in action.params:
         _point_list(action.params["exclude_seed_points"], "params.exclude_seed_points")
     _validate_selection_color_options(action.params)
@@ -961,6 +1008,14 @@ def _validate_magic_wand_select(action: Action) -> None:
             "params.kind",
         )
     _bool_value(action.params.get("set_active", True), "params.set_active")
+
+
+def _validate_fuzzy_select(action: Action) -> None:
+    _validate_magic_wand_select(action)
+
+
+def _validate_select_by_color(action: Action) -> None:
+    _validate_select_color_range(action)
 
 
 def _validate_create_mask_from_shape(action: Action) -> None:
@@ -1459,7 +1514,7 @@ def _validate_color_adjustment(action: Action) -> None:
             _point(point, f"params.points[{index}]")
     if "method" in action.params:
         if action.type == ActionType.COLORIZE:
-            _optional_enum_string(action.params["method"], {"luminance", "set_hue_preserve_lightness", "set_hue_preserve_value", "material_hsl"}, "params.method")
+            _optional_enum_string(action.params["method"], {"gimp", "luminance", "set_hue_preserve_lightness", "set_hue_preserve_value", "material_hsl"}, "params.method")
         elif action.type == ActionType.DESATURATE:
             _optional_enum_string(action.params["method"], {"luminance", "average", "lightness"}, "params.method")
         else:
@@ -1810,6 +1865,8 @@ _PARAM_VALIDATORS = {
     ActionType.SELECT_FROM_ALPHA: _validate_select_from_alpha,
     ActionType.SELECT_COLOR_RANGE: _validate_select_color_range,
     ActionType.MAGIC_WAND_SELECT: _validate_magic_wand_select,
+    ActionType.FUZZY_SELECT: _validate_fuzzy_select,
+    ActionType.SELECT_BY_COLOR: _validate_select_by_color,
     ActionType.SAVE_SELECTION_AS_MASK: _validate_save_selection_as_mask,
     ActionType.CREATE_MASK_FROM_SHAPE: _validate_create_mask_from_shape,
     ActionType.GROW_MASK: _validate_grow_mask,

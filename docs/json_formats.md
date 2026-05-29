@@ -1045,12 +1045,12 @@ final alpha channel.
 
 The ellipse is rasterized inside `bbox_xyxy` as a hard selection mask.
 
-### `select_color_range`
+### `select_color_range` / `select_by_color`
 
 ```json
 {
   "id": "action_select_eye_color",
-  "type": "select_color_range",
+  "type": "select_by_color",
   "target": {
     "layer_id": "layer_source",
     "mask_id": "mask_eye_color"
@@ -1058,7 +1058,9 @@ The ellipse is rasterized inside `bbox_xyxy` as a hard selection mask.
   "params": {
     "name": "eye color",
     "color": "#62beb4",
-    "tolerance": 0.36,
+    "threshold": 15,
+    "criterion": "composite",
+    "antialias": true,
     "bbox_xyxy": [160, 160, 260, 260],
     "alpha_min": 0.9,
     "kind": "selection",
@@ -1067,16 +1069,18 @@ The ellipse is rasterized inside `bbox_xyxy` as a hard selection mask.
 }
 ```
 
-The mask includes pixels on `target.layer_id` whose RGB distance from `color` is
-within `tolerance`. `bbox_xyxy`, when supplied, confines the selection to a
-rectangular region.
+The mask includes pixels on `target.layer_id` whose color is close to `color`.
+For RGB/composite selection, the kernel follows GIMP's max-channel color
+difference and can produce a soft antialiased selection. `threshold` uses GIMP's
+0-255 units; legacy `tolerance` is still accepted as a normalized value.
+`bbox_xyxy`, when supplied, confines the selection to a rectangular region.
 
-### `magic_wand_select`
+### `fuzzy_select` / `magic_wand_select`
 
 ```json
 {
   "id": "action_select_background",
-  "type": "magic_wand_select",
+  "type": "fuzzy_select",
   "target": {
     "layer_id": "layer_source",
     "mask_id": "mask_background"
@@ -1084,7 +1088,9 @@ rectangular region.
   "params": {
     "name": "connected background",
     "seed_points": [[70, 70], [560, 70]],
-    "tolerance": 0.08,
+    "threshold": 15,
+    "criterion": "composite",
+    "antialias": true,
     "alpha_min": 0.9,
     "diagonal": false,
     "kind": "selection",
@@ -1093,8 +1099,13 @@ rectangular region.
 }
 ```
 
-Each seed selects the contiguous region whose pixels are within `tolerance` of
-the seed pixel's RGB value. `diagonal=false` uses four-neighbor connectivity.
+Each seed selects the contiguous region whose pixels are similar to the clicked
+seed color. The implementation is intentionally close to GIMP fuzzy select:
+`threshold` is in 0-255 units, `criterion: "composite"` uses max-channel color
+difference, and antialiasing returns partial mask values near the boundary.
+`diagonal=false` uses four-neighbor connectivity. Multiple seeds are unioned;
+for per-click operations, use `clicks` entries with `operation` set to
+`replace`, `add`, `subtract`, or `intersect`.
 
 ### `create_mask_from_shape`
 
@@ -1404,9 +1415,10 @@ stable IDs over names.
   `transform_layer`, and `align_layer`.
 - Layer-mask actions: `add_layer_mask`, `apply_layer_mask`, and
   `remove_layer_mask`.
-- Selection and mask-cleanup actions: `select_polygon`, `select_freehand`,
-  `select_from_alpha`, `save_selection_as_mask`, `refine_selection`,
-  `remove_small_islands`, and `fill_mask_holes`.
+- Selection and mask-cleanup actions: `fuzzy_select`, `select_by_color`,
+  `select_polygon`, `select_freehand`, `select_from_alpha`,
+  `save_selection_as_mask`, `refine_selection`, `remove_small_islands`, and
+  `fill_mask_holes`.
 - Drawing and fill actions: `draw_path`, `brush_stroke`, `erase_stroke`,
   `gradient_fill`, and `pattern_fill`.
 - Clipboard and region-transfer actions: `copy`, `cut`, `paste`,

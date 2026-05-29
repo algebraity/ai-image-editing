@@ -101,7 +101,7 @@ def build_example_0021(dataset_root: Path, args: argparse.Namespace) -> ExampleS
     prompt = "color her scarf light blue while keeping the black line art and shading intact"
     source = args.images_dir / "anime_girl.jpg"
     document, width, height = source_document("doc_training0021_initial", source, "Initial source document")
-    scarf_bbox = [180, 500, 850, 1202]
+    scarf_bbox = [90, 485, 850, 1202]
     return image_overlay_example(
         "training0021",
         prompt,
@@ -110,15 +110,24 @@ def build_example_0021(dataset_root: Path, args: argparse.Namespace) -> ExampleS
         width,
         height,
         [
-            color_range_action("mask_scarf_dark", "Dark gray scarf tones", "#797979", 0.16, scarf_bbox, "Select darker gray scarf tones inside the scarf area."),
-            color_range_action("mask_scarf_mid", "Mid gray scarf tones", "#A1A1A1", 0.16, scarf_bbox, "Select mid-gray scarf tones inside the scarf area."),
-            color_range_action("mask_scarf_light", "Light gray scarf tones", "#D3D3D3", 0.13, scarf_bbox, "Select lighter gray scarf tones inside the scarf area without selecting the white paper background."),
-            combine_action("mask_scarf", ["mask_scarf_dark", "mask_scarf_mid", "mask_scarf_light"], "Combined scarf tone mask", "union", "Union the selected gray scarf tones into one write mask."),
-            colorize_action("mask_scarf", "#6CB6FF", "Color the selected scarf tones light blue while preserving black line art and white highlights.", method="luminance"),
+            polygon_select_action("mask_scarf_neck_bounds", "Neck scarf bounds", [[250, 585], [340, 545], [505, 525], [605, 565], [580, 640], [450, 675], [300, 655]], "Bound the gray neck scarf below the mouth without including the face or jacket."),
+            polygon_select_action("mask_scarf_left_bounds", "Left scarf tail bounds", [[215, 635], [302, 670], [355, 1201], [100, 1201], [150, 1130], [190, 1000], [180, 820], [195, 690]], "Bound the left dangling scarf tail, including the lower-left end while excluding nearby music notes."),
+            polygon_select_action("mask_scarf_right_bounds", "Right scarf tail bounds", [[585, 535], [650, 590], [760, 780], [842, 1040], [850, 1201], [650, 1201], [690, 1030], [700, 880], [690, 760], [650, 660]], "Bound the right dangling scarf tail while excluding the decorative star and note cluster in the inner gap."),
+            combine_action("mask_scarf_bounds", ["mask_scarf_neck_bounds", "mask_scarf_left_bounds", "mask_scarf_right_bounds"], "Combined scarf bounds", "union", "Union the hand-bounded scarf regions."),
+            color_range_action("mask_scarf_dark", "Dark gray scarf tones", "#787878", 0.15, scarf_bbox, "Select darker gray scarf tones."),
+            color_range_action("mask_scarf_mid", "Mid gray scarf tones", "#A2A2A2", 0.15, scarf_bbox, "Select mid-gray scarf tones."),
+            color_range_action("mask_scarf_light", "Light gray scarf tones", "#D2D2D2", 0.10, scarf_bbox, "Select light gray scarf tones without selecting white background."),
+            combine_action("mask_scarf_tones", ["mask_scarf_dark", "mask_scarf_mid", "mask_scarf_light"], "Combined scarf gray tones", "union", "Union the scarf tone selections."),
+            combine_action("mask_scarf", ["mask_scarf_bounds", "mask_scarf_tones"], "Bounded scarf tone mask", "intersect", "Keep only gray scarf-tone pixels inside the bounded scarf regions."),
+            shape_mask_action("mask_right_gap_upper_decor", "Upper right background decoration guard", {"type": "ellipse", "bbox_xyxy": [650, 610, 760, 700]}, "Protect the nearby background star and note outlines from the scarf recolor."),
+            shape_mask_action("mask_right_gap_lower_decor", "Lower right background decoration guard", {"type": "ellipse", "bbox_xyxy": [710, 700, 805, 780]}, "Protect the nearby lower background star outlines from the scarf recolor."),
+            combine_action("mask_scarf_background_decor", ["mask_right_gap_upper_decor", "mask_right_gap_lower_decor"], "Protected background decorations near scarf", "union", "Union the background decoration guard masks."),
+            combine_action("mask_scarf_clean", ["mask_scarf", "mask_scarf_background_decor"], "Scarf mask without background decorations", "subtract", "Remove nearby background decorations from the scarf recolor mask."),
+            colorize_action("mask_scarf_clean", "#6CB6FF", "Color the selected scarf tones light blue while preserving black line art, white highlights, and nearby gray decorations.", method="luminance"),
         ],
         [
             source_observation(width, height),
-            region_observation("The scarf is selected by gray tone ranges inside the scarf bounds, avoiding the white background and coat.", scarf_bbox),
+            region_observation("The scarf is selected by intersecting gray tone ranges with bounded scarf silhouettes so the lower-left tail is included and background decorations are excluded.", scarf_bbox),
         ],
         "Recolor the grayscale scarf to light blue while preserving line art.",
     )
@@ -177,7 +186,7 @@ def build_example_0024(dataset_root: Path, args: argparse.Namespace) -> ExampleS
     prompt = "cross out the word BEEF with a red slash and underline PORK? in red"
     source = args.images_dir / "beef_or_pork.png"
     document, width, height = source_document("doc_training0024_initial", source, "Initial source document")
-    underline_bbox = [250, 70, 446, 80]
+    underline_bbox = [252, 68, 448, 77]
     return image_overlay_example(
         "training0024",
         prompt,
@@ -187,7 +196,7 @@ def build_example_0024(dataset_root: Path, args: argparse.Namespace) -> ExampleS
         height,
         [
             create_shape_layer_action("layer_red_marks", "red title marks", "Create a transparent overlay layer for the red title marks."),
-            brush_stroke_action("layer_red_marks", [[25, 25], [175, 75]], "#e60022", 9, "Draw a red diagonal slash through the word BEEF."),
+            brush_stroke_action("layer_red_marks", [[18, 58], [182, 20]], "#e60022", 8, "Draw a centered red diagonal slash through the middle of the word BEEF."),
             draw_shape_action("layer_red_marks", {"type": "rectangle", "bbox_xyxy": underline_bbox, "corner_radius": 0}, None, {"color": "#e60022"}, "Draw a red underline beneath the word PORK?."),
         ],
         [
@@ -224,12 +233,10 @@ def build_example_0025(dataset_root: Path, args: argparse.Namespace) -> ExampleS
 
 
 def build_example_0026(dataset_root: Path, args: argparse.Namespace) -> ExampleSpec:
-    prompt = "turn the cow-print swimsuit into an orange tiger-print suit with black stripes"
+    prompt = "change the cow-print suit's black spots to brown while keeping the white fabric and line art the same"
     source = args.images_dir / "cow_woman.jpg"
     document, width, height = source_document("doc_training0026_initial", source, "Initial source document")
-    top_left = [340, 500, 510, 660]
-    top_right = [500, 500, 690, 675]
-    bottom = [270, 780, 555, 975]
+    suit_bbox = [285, 500, 765, 1181]
     return image_overlay_example(
         "training0026",
         prompt,
@@ -238,21 +245,16 @@ def build_example_0026(dataset_root: Path, args: argparse.Namespace) -> ExampleS
         width,
         height,
         [
-            create_shape_layer_action("layer_tiger_base", "orange tiger suit panels", "Create a transparent overlay layer for the tiger-orange suit panels."),
-            draw_shape_action("layer_tiger_base", {"type": "ellipse", "bbox_xyxy": top_left}, None, {"color": "#E98222"}, "Paint an orange tiger-suit panel over the left top cup."),
-            draw_shape_action("layer_tiger_base", {"type": "ellipse", "bbox_xyxy": top_right}, None, {"color": "#E98222"}, "Paint an orange tiger-suit panel over the right top cup."),
-            draw_shape_action("layer_tiger_base", {"type": "ellipse", "bbox_xyxy": bottom}, None, {"color": "#E98222"}, "Paint an orange tiger-suit panel over the lower swimsuit."),
-            create_shape_layer_action("layer_tiger_stripes", "black tiger stripes", "Create a transparent overlay layer for black tiger stripes."),
-            brush_stroke_action("layer_tiger_stripes", [[385, 525], [420, 565], [400, 620]], "#111111", 9, "Draw the first black stripe across the tiger-print top."),
-            brush_stroke_action("layer_tiger_stripes", [[575, 525], [535, 575], [555, 635]], "#111111", 9, "Draw the second black stripe across the tiger-print top."),
-            brush_stroke_action("layer_tiger_stripes", [[330, 820], [380, 855], [350, 930]], "#111111", 9, "Draw a black stripe on the lower tiger-print suit."),
-            brush_stroke_action("layer_tiger_stripes", [[470, 815], [515, 860], [500, 935]], "#111111", 9, "Draw another black stripe on the lower tiger-print suit."),
+            color_range_action("mask_cow_spots_gray", "Gray cow-print spot interiors", "#685A59", 0.18, suit_bbox, "Select gray interiors of the existing cow-print spots."),
+            color_range_action("mask_cow_spots_dark", "Dark cow-print spot interiors", "#503C3D", 0.16, suit_bbox, "Select darker interiors of the existing cow-print spots."),
+            combine_action("mask_cow_spots", ["mask_cow_spots_gray", "mask_cow_spots_dark"], "Combined cow-print spot mask", "union", "Combine the gray and dark cow-print spot interiors."),
+            paint_bucket_fill_action("source_image", "mask_cow_spots", "#8A5833", "Fill the selected cow-print spots with visible warm brown."),
         ],
         [
             source_observation(width, height),
-            region_observation("Orange tiger-suit panels and black stripes are drawn over the existing cow-print swimsuit areas.", [270, 500, 690, 975]),
+            region_observation("The existing gray and dark cow-print spot interiors on the suit and stockings are selected and recolored brown.", suit_bbox),
         ],
-        "Convert the cow-print swimsuit into a simple orange tiger-print suit.",
+        "Recolor the cow-print spots from black to brown while preserving white fabric and line art.",
     )
 
 
@@ -282,9 +284,10 @@ def build_example_0027(dataset_root: Path, args: argparse.Namespace) -> ExampleS
 
 
 def build_example_0028(dataset_root: Path, args: argparse.Namespace) -> ExampleSpec:
-    prompt = "remove the blue halo behind her head by painting the white background back over it"
+    prompt = "change the blue halo behind her head to gold while keeping its shape the same"
     source = args.images_dir / "halo_girl.jpg"
     document, width, height = source_document("doc_training0028_initial", source, "Initial source document")
+    halo_bbox = [75, 0, 430, 175]
     return image_overlay_example(
         "training0028",
         prompt,
@@ -293,16 +296,17 @@ def build_example_0028(dataset_root: Path, args: argparse.Namespace) -> ExampleS
         width,
         height,
         [
-            brush_stroke_action("source_image", [[90, 85], [120, 35], [195, 12], [290, 10], [390, 45]], "#FFFFFF", 58, "Paint white over the upper blue halo arcs.", mode="replace_rgba"),
-            brush_stroke_action("source_image", [[80, 45], [60, 100], [82, 165]], "#FFFFFF", 44, "Paint white over the left blue halo arc.", mode="replace_rgba"),
-            brush_stroke_action("source_image", [[175, 105], [225, 65], [305, 75], [365, 125]], "#FFFFFF", 46, "Paint white over the central blue halo ring.", mode="replace_rgba"),
-            brush_stroke_action("source_image", [[300, 0], [360, 30], [420, 85]], "#FFFFFF", 52, "Paint white over the remaining upper-right halo marks.", mode="replace_rgba"),
+            color_range_action("mask_halo_deep_blue", "Deep blue halo arcs", "#294A68", 0.18, halo_bbox, "Select the deepest blue halo arc segments behind the head."),
+            color_range_action("mask_halo_mid_blue", "Mid blue halo arcs", "#3E7898", 0.20, halo_bbox, "Select the mid-blue antialiased halo arc pixels."),
+            color_range_action("mask_halo_cyan", "Cyan halo ring", "#35DCE5", 0.16, halo_bbox, "Select the bright cyan inner halo ring."),
+            combine_action("mask_halo", ["mask_halo_deep_blue", "mask_halo_mid_blue", "mask_halo_cyan"], "Combined blue halo mask", "union", "Combine the blue and cyan halo selections."),
+            colorize_action("mask_halo", "#F0B400", "Recolor the halo gold while preserving the original ring shapes and opacity.", method="set_hue_preserve_lightness"),
         ],
         [
             source_observation(width, height),
-            region_observation("The blue halo graphic behind the head is removed with bounded white brush strokes on the white background.", [75, 0, 390, 155]),
+            region_observation("The blue halo graphic behind the head is selected by color range and recolored gold without touching the head.", halo_bbox),
         ],
-        "Remove the blue halo by painting the white background back over it.",
+        "Recolor the blue halo behind the head to gold.",
     )
 
 
@@ -527,6 +531,7 @@ def seeded_color_range_action(
     hue_tolerance_degrees: float = 32,
     saturation_tolerance: float = 0.55,
     value_tolerance: float = 0.60,
+    edge_stop_threshold: float | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "name": name,
@@ -542,8 +547,10 @@ def seeded_color_range_action(
     }
     if exclude_seed_points:
         params["exclude_seed_points"] = exclude_seed_points
+    if edge_stop_threshold is not None:
+        params["edge_stop_threshold"] = edge_stop_threshold
     return {
-        "type": "select_color_range",
+        "type": "magic_wand_select" if edge_stop_threshold is not None else "select_color_range",
         "target": {"layer_id": "source_image", "mask_id": mask_id},
         "params": params,
         "description": description,

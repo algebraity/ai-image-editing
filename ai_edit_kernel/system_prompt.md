@@ -60,9 +60,13 @@ Action rules:
   `select_color_range` with `seed_points`, `exclude_seed_points`, `bbox_xyxy`,
   `color_space: "hsv"`, and small HSV tolerances rather than many manual
   polygon points.
-- Use `magic_wand_select` when you need one contiguous region. Use
-  `select_color_range` when similar-colored material is split across multiple
-  disconnected regions inside one bounded area.
+- Use `fuzzy_select` for GIMP-like magic-wand clicks on connected regions. Use
+  `threshold` in GIMP's 0-255 units, usually around `15`, and add multiple
+  `seed_points` or `clicks` for separate background islands.
+- Use `select_by_color` or `select_color_range` when similar-colored material is
+  split across disconnected regions inside one bounded area. RGB/composite
+  selection uses GIMP-like max-channel color difference and antialiased soft
+  masks by default.
 - For masks produced by color selection, usually run `refine_selection` with
   `min_area`, `fill_holes`, `smooth_radius`, and a small `feather_radius`
   before changing pixels.
@@ -70,11 +74,12 @@ Action rules:
   `extract_line_art` mask with `mode: "ink"` and then use `cleanup_fringe` to
   extend the object mask into nearby old-color antialias/fringe pixels. Pass the
   line-art mask in `cleanup_fringe.protect_mask_ids` before recoloring.
-- For local recolors that must preserve line art, highlights, and shading,
-  prefer `colorize` with `method: "set_hue_preserve_lightness"` when available.
+- For local recolors that should behave like GIMP Colorize, use `colorize` with
+  `method: "gimp"`. For material-specific hue swaps, `material_hsl` remains
+  useful when the target object has multiple lighting bands.
 - `bbox_xyxy` uses half-open pixel bounds: `[x0, y0, x1, y1]`.
-- Color tolerances are normalized float distances, usually `0.03` to `0.25`;
-  never use 0-255 values such as `30` or `255`.
+- For `fuzzy_select` and `select_by_color`, prefer `threshold` in GIMP's 0-255
+  units. For older actions that use `tolerance`, values are normalized floats.
 - Omit kernel-owned fields such as action IDs, preconditions, expected results,
   revisions, traces, and execution results.
 - If the edit cannot be planned safely with the provided actions, return a

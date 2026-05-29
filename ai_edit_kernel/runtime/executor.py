@@ -235,6 +235,8 @@ class Executor:
             ActionType.SELECT_FROM_ALPHA: self._execute_select_from_alpha,
             ActionType.SELECT_COLOR_RANGE: self._execute_select_color_range,
             ActionType.MAGIC_WAND_SELECT: self._execute_magic_wand_select,
+            ActionType.FUZZY_SELECT: self._execute_magic_wand_select,
+            ActionType.SELECT_BY_COLOR: self._execute_select_color_range,
             ActionType.SAVE_SELECTION_AS_MASK: self._execute_save_selection_as_mask,
             ActionType.CREATE_MASK_FROM_SHAPE: self._execute_create_mask_from_shape,
             ActionType.GROW_MASK: self._execute_grow_mask,
@@ -816,7 +818,7 @@ class Executor:
             name=action.params.get("name", mask_id),
             data=data,
             kind=MaskKind(action.params.get("kind", MaskKind.SELECTION.value)),
-            hard=True,
+            hard=_mask_is_binary(data),
             source=action.id,
         )
         document.add_mask(mask)
@@ -850,7 +852,7 @@ class Executor:
             name=action.params.get("name", mask_id),
             data=data,
             kind=MaskKind(action.params.get("kind", MaskKind.SELECTION.value)),
-            hard=True,
+            hard=_mask_is_binary(data),
             source=action.id,
         )
         document.add_mask(mask)
@@ -885,7 +887,7 @@ class Executor:
         mask_id = _required_target(action.target.mask_id, "target.mask_id")
         data = _magic_wand_mask(
             layer.pixels,
-            action.params["seed_points"],
+            action.params.get("seed_points", []),
             action.params,
             float(action.params.get("alpha_min", 0.0)),
             bool(action.params.get("diagonal", False)),
@@ -896,7 +898,7 @@ class Executor:
             name=action.params.get("name", mask_id),
             data=data,
             kind=MaskKind(action.params.get("kind", MaskKind.SELECTION.value)),
-            hard=True,
+            hard=_mask_is_binary(data),
             source=action.id,
         )
         document.add_mask(mask)
@@ -1444,9 +1446,22 @@ class Executor:
         _require_pixel_layer(layer)
         target = np.asarray(_parse_color(action.params.get("color", "#ff0000"))[:3], dtype=np.float32)
         amount = float(action.params.get("amount", 1.0))
-        method = action.params.get("method", "luminance")
+        method = action.params.get("method", "gimp")
         proposed = np.array(layer.pixels, copy=True)
-        if method == "luminance":
+        if method == "gimp":
+            target_hsl = _rgb_to_hsl(target.reshape((1, 1, 3)))[0, 0]
+            hsl = np.empty_like(proposed[..., :3])
+            hsl[..., 0] = target_hsl[0]
+            hsl[..., 1] = float(action.params.get("saturation", target_hsl[1]))
+            lum = _gimp_luminance(proposed[..., :3])
+            lightness = float(action.params.get("lightness", target_hsl[2] * 2.0 - 1.0))
+            if lightness > 0.0:
+                lum = lum * (1.0 - lightness) + 1.0 - (1.0 - lightness)
+            elif lightness < 0.0:
+                lum = lum * (lightness + 1.0)
+            hsl[..., 2] = np.clip(lum, 0.0, 1.0)
+            colorized = _hsl_to_rgb(hsl)
+        elif method == "luminance":
             lum = _luminance(proposed[..., :3])[..., np.newaxis]
             colorized = lum * target
         elif method == "set_hue_preserve_lightness":
@@ -1489,7 +1504,11 @@ class Executor:
         target = np.asarray(_parse_color(action.params["target_color"])[:3], dtype=np.float32)
         tolerance = float(action.params.get("tolerance", 0.1))
         softness = max(float(action.params.get("softness", 0.0)), 1e-6)
-        distance = np.linalg.norm(layer.pixels[..., :3] - source, axis=-1)
+        distance = _gimp_selection_difference(
+            layer.pixels,
+            np.concatenate([source, np.asarray([1.0], dtype=np.float32)]),
+            {"tolerance": tolerance, "criterion": "composite", "select_transparent": False},
+        )
         weight = np.clip((tolerance + softness - distance) / softness, 0.0, 1.0)[..., np.newaxis]
         proposed = np.array(layer.pixels, copy=True)
         proposed[..., :3] = np.clip(proposed[..., :3] * (1.0 - weight) + target * weight, 0.0, 1.0)
@@ -2336,6 +2355,11 @@ def _luminance(rgb: np.ndarray) -> np.ndarray:
     return (rgb[..., 0] * 0.2126 + rgb[..., 1] * 0.7152 + rgb[..., 2] * 0.0722).astype(np.float32)
 
 
+def _gimp_luminance(rgb: np.ndarray) -> np.ndarray:
+    """Return GIMP's RGB luminance weights for colorize/threshold-style operations."""
+    return (rgb[..., 0] * 0.22248840 + rgb[..., 1] * 0.71690369 + rgb[..., 2] * 0.06060791).astype(np.float32)
+
+
 def _disk_footprint(radius: int) -> np.ndarray:
     """Return a disk-shaped boolean footprint."""
     if radius <= 0:
@@ -2379,6 +2403,11 @@ def _write_mask_weights(document: DocumentState, write_mask_id: str | None, shap
     if mask.shape != shape:
         raise ValueError("write mask shape does not match layer pixels")
     return np.clip(mask, 0.0, 1.0).astype(np.float32)
+
+
+def _mask_is_binary(data: np.ndarray) -> bool:
+    """Return whether a generated mask contains only hard 0/1 values."""
+    return bool(np.all(np.isclose(data, 0.0) | np.isclose(data, 1.0)))
 
 
 def _translate_mask(data: np.ndarray, dx: int, dy: int) -> np.ndarray:
@@ -3325,17 +3354,18 @@ def _color_range_mask(
     params: dict[str, Any],
     alpha_min: float,
 ) -> np.ndarray:
-    """Select pixels whose colors are close to explicit colors or sampled seed colors."""
+    """Select pixels close to explicit or sampled colors using GIMP-like semantics."""
     if pixels.ndim != 3 or pixels.shape[2] != 4:
         raise ValueError("pixel arrays must have shape H x W x 4")
     if alpha_min < 0.0 or alpha_min > 1.0:
         raise ValueError("alpha_min must be in [0, 1]")
     targets = _selection_target_colors(pixels, params)
-    data = _color_similarity_mask(pixels, targets, params) & (pixels[..., 3] >= alpha_min)
+    data = _color_similarity_values(pixels, targets, params)
+    data[pixels[..., 3] < alpha_min] = 0.0
     exclude_points = params.get("exclude_seed_points", [])
     if exclude_points:
         exclude_targets = np.asarray(_seed_target_colors(pixels, exclude_points), dtype=np.float32)
-        data &= ~_exclude_color_similarity_mask(pixels, exclude_targets, params)
+        data[_exclude_color_similarity_mask(pixels, exclude_targets, params)] = 0.0
     return data.astype(np.float32)
 
 
@@ -3347,13 +3377,13 @@ def _magic_wand_mask(
     diagonal: bool,
     bbox_xyxy: Any | None = None,
 ) -> np.ndarray:
-    """Select contiguous regions close to the color under each seed point."""
+    """Select contiguous regions close to the clicked colors, matching GIMP fuzzy select."""
     if pixels.ndim != 3 or pixels.shape[2] != 4:
         raise ValueError("pixel arrays must have shape H x W x 4")
     if alpha_min < 0.0 or alpha_min > 1.0:
         raise ValueError("alpha_min must be in [0, 1]")
     height, width = pixels.shape[:2]
-    selected = np.zeros((height, width), dtype=bool)
+    selected = np.zeros((height, width), dtype=np.float32)
     allowed = pixels[..., 3] >= alpha_min
     if bbox_xyxy is not None:
         bbox_mask = np.zeros((height, width), dtype=bool)
@@ -3364,38 +3394,89 @@ def _magic_wand_mask(
     if exclude_points:
         exclude_targets = np.asarray(_seed_target_colors(pixels, exclude_points), dtype=np.float32)
         allowed &= ~_exclude_color_similarity_mask(pixels, exclude_targets, params)
-    edge_stop_threshold = params.get("edge_stop_threshold")
-    edge_stop = None if edge_stop_threshold is None else float(edge_stop_threshold)
     neighbors = (
         [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
         if diagonal
         else [(-1, 0), (1, 0), (0, -1), (0, 1)]
     )
 
-    for point in seed_points:
+    for index, click in enumerate(_selection_clicks(seed_points, params)):
+        point = click["point"]
         x, y = _point_to_ints(point, width, height)
-        target = pixels[y, x, :3][np.newaxis, :]
-        candidate = _color_similarity_mask(pixels, target, params) & allowed
-        if not bool(candidate[y, x]) or bool(selected[y, x]):
-            continue
+        click_params = dict(params)
+        if "threshold" in click:
+            click_params["threshold"] = click["threshold"]
+            click_params.pop("tolerance", None)
+        if "tolerance" in click:
+            click_params["tolerance"] = click["tolerance"]
+            click_params.pop("threshold", None)
+        target = pixels[y, x, :][np.newaxis, :]
+        values = _color_similarity_values(pixels, target, click_params)
+        candidate = (values > 0.0) & allowed
+        click_mask = _connected_values_from_seed(values, candidate, x, y, neighbors)
+        operation = click.get("operation") or ("replace" if index == 0 else "add")
+        selected = _combine_selection_values(selected, click_mask, operation)
 
-        queue: deque[tuple[int, int]] = deque([(x, y)])
-        selected[y, x] = True
-        while queue:
-            current_x, current_y = queue.popleft()
-            for dx, dy in neighbors:
-                next_x = current_x + dx
-                next_y = current_y + dy
-                if next_x < 0 or next_y < 0 or next_x >= width or next_y >= height:
-                    continue
-                if selected[next_y, next_x] or not candidate[next_y, next_x]:
-                    continue
-                if edge_stop is not None and _crosses_rgb_edge(pixels, current_x, current_y, next_x, next_y, edge_stop):
-                    continue
-                selected[next_y, next_x] = True
-                queue.append((next_x, next_y))
+    return np.clip(selected, 0.0, 1.0).astype(np.float32)
 
-    return selected.astype(np.float32)
+
+def _selection_clicks(seed_points: list[Any], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return normalized fuzzy-select clicks from params.clicks or seed_points."""
+    clicks = params.get("clicks")
+    if clicks:
+        normalized: list[dict[str, Any]] = []
+        for item in clicks:
+            if isinstance(item, dict):
+                click = dict(item)
+                normalized.append(click)
+            else:
+                normalized.append({"point": item})
+        return normalized
+    return [{"point": point} for point in seed_points]
+
+
+def _connected_values_from_seed(
+    values: np.ndarray,
+    candidate: np.ndarray,
+    seed_x: int,
+    seed_y: int,
+    neighbors: list[tuple[int, int]],
+) -> np.ndarray:
+    """Keep the connected component containing a seed, preserving soft values."""
+    height, width = values.shape
+    selected = np.zeros((height, width), dtype=np.float32)
+    if not bool(candidate[seed_y, seed_x]):
+        return selected
+
+    queue: deque[tuple[int, int]] = deque([(seed_x, seed_y)])
+    visited = np.zeros((height, width), dtype=bool)
+    visited[seed_y, seed_x] = True
+    while queue:
+        current_x, current_y = queue.popleft()
+        selected[current_y, current_x] = values[current_y, current_x]
+        for dx, dy in neighbors:
+            next_x = current_x + dx
+            next_y = current_y + dy
+            if next_x < 0 or next_y < 0 or next_x >= width or next_y >= height:
+                continue
+            if visited[next_y, next_x] or not bool(candidate[next_y, next_x]):
+                continue
+            visited[next_y, next_x] = True
+            queue.append((next_x, next_y))
+    return selected
+
+
+def _combine_selection_values(base: np.ndarray, incoming: np.ndarray, operation: str) -> np.ndarray:
+    """Combine soft selection masks using GIMP-like selection operations."""
+    if operation == "replace":
+        return incoming.astype(np.float32, copy=True)
+    if operation == "add":
+        return np.maximum(base, incoming).astype(np.float32)
+    if operation == "subtract":
+        return (base * (1.0 - incoming)).astype(np.float32)
+    if operation == "intersect":
+        return np.minimum(base, incoming).astype(np.float32)
+    raise ValueError(f"unsupported selection operation {operation!r}")
 
 
 def _seeded_object_mask(pixels: np.ndarray, params: dict[str, Any], alpha_min: float) -> np.ndarray:
@@ -3475,10 +3556,10 @@ def _crosses_rgb_edge(pixels: np.ndarray, x0: int, y0: int, x1: int, y1: int, th
 
 
 def _selection_target_colors(pixels: np.ndarray, params: dict[str, Any]) -> np.ndarray:
-    """Return RGB target colors from params.color plus any sampled seed points."""
+    """Return RGBA target colors from params.color plus sampled seed points."""
     targets: list[np.ndarray] = []
     if "color" in params:
-        targets.append(np.asarray(_parse_color(params["color"])[:3], dtype=np.float32))
+        targets.append(np.asarray(_parse_color(params["color"]), dtype=np.float32))
     if params.get("seed_points"):
         targets.extend(_seed_target_colors(pixels, params["seed_points"]))
     if not targets:
@@ -3512,12 +3593,12 @@ def _fringe_color_params(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _seed_target_colors(pixels: np.ndarray, seed_points: list[Any]) -> list[np.ndarray]:
-    """Sample RGB colors from seed points."""
+    """Sample RGBA colors from seed points."""
     height, width = pixels.shape[:2]
     colors: list[np.ndarray] = []
     for point in seed_points:
         x, y = _point_to_ints(point, width, height)
-        colors.append(np.asarray(pixels[y, x, :3], dtype=np.float32))
+        colors.append(np.asarray(pixels[y, x, :], dtype=np.float32))
     return colors
 
 
@@ -3525,13 +3606,13 @@ def _color_distance_to_targets(pixels: np.ndarray, targets: np.ndarray, params: 
     """Return the minimum color distance from every pixel to any target color."""
     if targets.size == 0:
         return np.full(pixels.shape[:2], np.inf, dtype=np.float32)
+    if str(params.get("color_space", "rgb")).lower() == "rgb" or "criterion" in params:
+        distances = [_gimp_selection_difference(pixels, target, params) for target in targets]
+        return np.min(np.stack(distances, axis=-1), axis=-1).astype(np.float32)
     color_space = str(params.get("color_space", "rgb")).lower()
-    if color_space == "rgb":
-        distance = np.linalg.norm(pixels[..., :3, np.newaxis] - targets.T[np.newaxis, np.newaxis, :, :], axis=2)
-        return np.min(distance, axis=-1).astype(np.float32)
     if color_space == "hsv":
         pixel_hsv = _rgb_to_hsv(pixels[..., :3])
-        target_hsv = _rgb_to_hsv(targets.reshape((1, targets.shape[0], 3)))[0]
+        target_hsv = _rgb_to_hsv(targets[:, :3].reshape((1, targets.shape[0], 3)))[0]
         hue_diff = np.abs(pixel_hsv[..., 0, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 0])
         hue_diff = np.minimum(hue_diff, 1.0 - hue_diff)
         saturation_diff = np.abs(pixel_hsv[..., 1, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 1])
@@ -3543,16 +3624,34 @@ def _color_distance_to_targets(pixels: np.ndarray, targets: np.ndarray, params: 
 
 def _color_similarity_mask(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     """Return pixels close to any target color in RGB or HSV space."""
+    return _color_similarity_values(pixels, targets, params) > 0.0
+
+
+def _color_similarity_values(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return a hard or antialiased GIMP-like color-similarity mask."""
     if targets.size == 0:
-        return np.zeros(pixels.shape[:2], dtype=bool)
+        return np.zeros(pixels.shape[:2], dtype=np.float32)
     color_space = str(params.get("color_space", "rgb")).lower()
-    if color_space == "rgb":
-        tolerance = _selection_tolerance(params)
-        distance = np.linalg.norm(pixels[..., :3, np.newaxis] - targets.T[np.newaxis, np.newaxis, :, :], axis=2)
-        return np.any(distance <= tolerance, axis=-1)
+    if color_space == "hsv" and "criterion" not in params:
+        return _legacy_hsv_similarity_values(pixels, targets, params)
+
+    threshold = _selection_tolerance(params)
+    antialias = bool(params.get("antialias", True))
+    values = np.zeros(pixels.shape[:2], dtype=np.float32)
+    for target in targets:
+        distance = _gimp_selection_difference(pixels, target, params)
+        values = np.maximum(values, _gimp_selection_values_from_distance(distance, threshold, antialias))
+    return values.astype(np.float32)
+
+
+def _legacy_hsv_similarity_values(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return the pre-GIMP-style combined HSV color-range mask for compatibility."""
+    if targets.size == 0:
+        return np.zeros(pixels.shape[:2], dtype=np.float32)
+    color_space = str(params.get("color_space", "rgb")).lower()
     if color_space == "hsv":
         pixel_hsv = _rgb_to_hsv(pixels[..., :3])
-        target_hsv = _rgb_to_hsv(targets.reshape((1, targets.shape[0], 3)))[0]
+        target_hsv = _rgb_to_hsv(targets[:, :3].reshape((1, targets.shape[0], 3)))[0]
         tolerance = float(params.get("tolerance", 0.0))
         if tolerance < 0.0:
             raise ValueError("tolerance must be nonnegative")
@@ -3565,18 +3664,95 @@ def _color_similarity_mask(pixels: np.ndarray, targets: np.ndarray, params: dict
         hue_diff = np.minimum(hue_diff, 1.0 - hue_diff)
         saturation_diff = np.abs(pixel_hsv[..., 1, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 1])
         value_diff = np.abs(pixel_hsv[..., 2, np.newaxis] - target_hsv[np.newaxis, np.newaxis, :, 2])
-        return np.any(
+        matched = np.any(
             (hue_diff <= hue_tolerance)
             & (saturation_diff <= saturation_tolerance)
             & (value_diff <= value_tolerance),
             axis=-1,
         )
+        return matched.astype(np.float32)
     raise ValueError("params.color_space must be 'rgb' or 'hsv'")
+
+
+def _gimp_selection_difference(pixels: np.ndarray, target: np.ndarray, params: dict[str, Any]) -> np.ndarray:
+    """Return GIMP-style normalized difference from one target color."""
+    criterion = str(params.get("criterion", "composite"))
+    target_rgba = _target_rgba(target)
+    select_transparent = bool(params.get("select_transparent", True))
+    target_is_transparent = target_rgba[3] <= 0.0
+
+    if select_transparent and target_is_transparent:
+        return np.abs(pixels[..., 3] - target_rgba[3]).astype(np.float32)
+
+    if not select_transparent or not target_is_transparent:
+        transparent = pixels[..., 3] <= 0.0
+    else:
+        transparent = np.zeros(pixels.shape[:2], dtype=bool)
+
+    if criterion == "composite":
+        distance = np.max(np.abs(pixels[..., :3] - target_rgba[:3]), axis=-1)
+    elif criterion == "rgb-red":
+        distance = np.abs(pixels[..., 0] - target_rgba[0])
+    elif criterion == "rgb-green":
+        distance = np.abs(pixels[..., 1] - target_rgba[1])
+    elif criterion == "rgb-blue":
+        distance = np.abs(pixels[..., 2] - target_rgba[2])
+    elif criterion == "alpha":
+        distance = np.abs(pixels[..., 3] - target_rgba[3])
+    elif criterion in {"hsv-hue", "hsv-saturation", "hsv-value"}:
+        distance = _gimp_hsv_criterion_difference(pixels, target_rgba, criterion)
+    else:
+        raise ValueError(f"unsupported selection criterion {criterion!r}")
+    distance = distance.astype(np.float32, copy=False)
+    distance[transparent] = np.inf
+    return distance
+
+
+def _gimp_hsv_criterion_difference(pixels: np.ndarray, target_rgba: np.ndarray, criterion: str) -> np.ndarray:
+    """Return one-channel HSV difference following GIMP's select criteria."""
+    pixel_hsv = _rgb_to_hsv(pixels[..., :3])
+    target_hsv = _rgb_to_hsv(target_rgba[:3].reshape((1, 1, 3)))[0, 0]
+    if criterion == "hsv-hue":
+        target_has_hue = target_hsv[1] > 1e-6
+        pixel_has_hue = pixel_hsv[..., 1] > 1e-6
+        hue_diff = np.abs(pixel_hsv[..., 0] - target_hsv[0])
+        hue_diff = np.minimum(hue_diff, 1.0 - hue_diff)
+        if target_has_hue:
+            return np.where(pixel_has_hue, hue_diff, 10.0).astype(np.float32)
+        return np.where(pixel_has_hue, 10.0, 0.0).astype(np.float32)
+    if criterion == "hsv-saturation":
+        return np.abs(pixel_hsv[..., 1] - target_hsv[1]).astype(np.float32)
+    if criterion == "hsv-value":
+        return np.abs(pixel_hsv[..., 2] - target_hsv[2]).astype(np.float32)
+    raise ValueError(f"unsupported HSV criterion {criterion!r}")
+
+
+def _gimp_selection_values_from_distance(distance: np.ndarray, threshold: float, antialias: bool) -> np.ndarray:
+    """Convert a GIMP-style distance map to hard or antialiased selection values."""
+    if threshold < 0.0:
+        raise ValueError("selection threshold must be nonnegative")
+    if not antialias or threshold == 0.0:
+        return (distance <= threshold).astype(np.float32)
+    aa = 1.5 - (distance / threshold)
+    values = np.where(aa <= 0.0, 0.0, np.where(aa < 0.5, aa * 2.0, 1.0))
+    return np.clip(values, 0.0, 1.0).astype(np.float32)
+
+
+def _target_rgba(target: np.ndarray) -> np.ndarray:
+    """Return a four-channel target color array."""
+    target = np.asarray(target, dtype=np.float32)
+    if target.shape[-1] == 4:
+        return target
+    if target.shape[-1] == 3:
+        return np.concatenate([target, np.asarray([1.0], dtype=np.float32)])
+    raise ValueError("target colors must have three or four channels")
 
 
 def _exclude_color_similarity_mask(pixels: np.ndarray, targets: np.ndarray, params: dict[str, Any]) -> np.ndarray:
     """Return a stricter color match for subtractive exclude seeds."""
     exclude_params = dict(params)
+    if "threshold" in exclude_params:
+        exclude_params["threshold"] = float(exclude_params["threshold"]) * 0.5
     if "tolerance" in exclude_params:
         exclude_params["tolerance"] = float(exclude_params["tolerance"]) * 0.5
     if "hue_tolerance_degrees" in exclude_params:
@@ -3589,9 +3765,14 @@ def _exclude_color_similarity_mask(pixels: np.ndarray, targets: np.ndarray, para
 
 
 def _selection_tolerance(params: dict[str, Any]) -> float:
-    """Return the normalized RGB tolerance for color selection."""
+    """Return the normalized selection threshold."""
+    if "threshold" in params:
+        threshold = float(params["threshold"]) / 255.0
+        if threshold < 0.0:
+            raise ValueError("threshold must be nonnegative")
+        return threshold
     if "tolerance" not in params:
-        raise ValueError("params.tolerance is required for RGB color selection")
+        return 15.0 / 255.0
     tolerance = float(params["tolerance"])
     if tolerance < 0.0:
         raise ValueError("tolerance must be nonnegative")

@@ -380,7 +380,7 @@ class NonAIStackTests(unittest.TestCase):
                 "layer_kiririn",
                 "mask_left_eye",
                 "#62beb4",
-                tolerance=0.36,
+                tolerance=0.16,
                 bbox_xyxy=left_eye_bbox,
                 name="left iris color range",
             ),
@@ -389,7 +389,7 @@ class NonAIStackTests(unittest.TestCase):
                 "layer_kiririn",
                 "mask_right_eye",
                 "#62beb4",
-                tolerance=0.36,
+                tolerance=0.16,
                 bbox_xyxy=right_eye_bbox,
                 name="right iris color range",
             ),
@@ -1197,6 +1197,62 @@ class NonAIStackTests(unittest.TestCase):
         self.assert_color_close(pixels[55, 18], [0xF7 / 255.0, 0xAA / 255.0, 0x9D / 255.0, 1.0], tolerance=0.02)
         self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
 
+    def test_42a_gimp_like_fuzzy_select_and_colorize(self) -> None:
+        """Use GIMP-style threshold units, max-channel distance, soft masks, clicks, and colorize."""
+        case_name = "test_42a_gimp_like_fuzzy_select_and_colorize"
+        actions = [
+            full_canvas_mask("action_001", "mask_full_canvas", 12, 8),
+            create_layer("action_002", "layer_art", "selection sample", color="#808080"),
+            draw_shape("action_003", "layer_art", rectangle([2, 0, 4, 8]), write_mask_id="mask_full_canvas", fill={"color": "#999980"}),
+            draw_shape("action_004", "layer_art", rectangle([4, 0, 6, 8]), write_mask_id="mask_full_canvas", fill={"color": "#b0b080"}),
+            draw_shape("action_005", "layer_art", rectangle([6, 0, 7, 8]), write_mask_id="mask_full_canvas", fill={"color": "#909090"}),
+            draw_shape("action_006", "layer_art", rectangle([8, 0, 9, 8]), write_mask_id="mask_full_canvas", fill={"color": "#000000"}),
+            action(
+                "action_007",
+                "select_by_color",
+                params={"name": "gimp composite max-channel", "color": "#808080", "tolerance": 0.12, "antialias": False, "set_active": False},
+                target={"layer_id": "layer_art", "mask_id": "mask_by_color"},
+            ),
+            action(
+                "action_008",
+                "select_by_color",
+                params={"name": "soft threshold edge", "color": "#808080", "threshold": 15, "antialias": True, "set_active": False},
+                target={"layer_id": "layer_art", "mask_id": "mask_soft"},
+            ),
+            action(
+                "action_009",
+                "fuzzy_select",
+                params={"name": "two clicked gray regions", "seed_points": [[0, 4], [10, 4]], "threshold": 15, "antialias": False, "diagonal": False, "set_active": False},
+                target={"layer_id": "layer_art", "mask_id": "mask_fuzzy"},
+            ),
+            action(
+                "action_010",
+                "colorize",
+                params={"color": "#ff0000", "method": "gimp", "amount": 1.0},
+                target={"layer_id": "layer_art"},
+                write_mask_id="mask_fuzzy",
+            ),
+            export_flat("action_011", self.export_path(case_name, "final.png")),
+        ]
+        doc, results, summary = self.run_case(case_name, 12, 8, actions)
+
+        self.assert_all_succeeded(results)
+        by_color = doc.get_mask("mask_by_color").data
+        soft = doc.get_mask("mask_soft").data
+        fuzzy = doc.get_mask("mask_fuzzy").data
+        pixels = doc.get_layer("layer_art").pixels
+        self.assertGreater(by_color[4, 2], 0.9)
+        self.assertLess(by_color[4, 4], 0.1)
+        self.assertGreater(soft[4, 6], 0.0)
+        self.assertLess(soft[4, 6], 1.0)
+        self.assertGreater(fuzzy[4, 0], 0.9)
+        self.assertGreater(fuzzy[4, 10], 0.9)
+        self.assertLess(fuzzy[4, 8], 0.1)
+        self.assertGreater(pixels[4, 0, 0], 0.9)
+        self.assertLess(pixels[4, 0, 1], 0.02)
+        self.assert_color_close(pixels[4, 8], [0.0, 0.0, 0.0, 1.0], tolerance=0.02)
+        self.assert_trace_healthy(summary, expected_results=len(actions), min_snapshots=len(actions) + 1)
+
     def test_42b_edge_seeded_object_repair_and_material_recolor(self) -> None:
         """Use edge-aware seeds, mask repair, and material recolor on adjacent regions."""
         case_name = "test_42b_edge_seeded_object_repair_and_material_recolor"
@@ -1214,8 +1270,7 @@ class NonAIStackTests(unittest.TestCase):
                 params={
                     "name": "edge-aware hair mass",
                     "seed_points": [[14, 14]],
-                    "tolerance": 0.45,
-                    "edge_stop_threshold": 0.20,
+                    "tolerance": 0.25,
                     "bbox_xyxy": [6, 6, 70, 58],
                     "alpha_min": 0.0,
                     "diagonal": True,
